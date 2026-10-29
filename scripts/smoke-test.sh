@@ -26,7 +26,7 @@ sed -n '/com.apple.main-thread/,/^ *[0-9][0-9]* Thread_/p' build/sample.txt | he
 # Click the menu bar icon the way a person would, and list what its menu holds (needs the runner's
 # accessibility permission; without it this only says so).
 echo "--- clicking the menu bar icon ---"
-perl -e 'alarm 30; exec @ARGV' osascript <<'OSA' 2>&1 || true
+perl -e 'alarm 30; exec @ARGV' osascript <<'OSA' 2>&1 | tee build/click.log || true
 tell application "System Events"
   tell process "Mindmap"
     log ("windows: " & (count of windows))
@@ -43,7 +43,9 @@ tell application "System Events"
         log "  (unnamed item)"
       end try
     end repeat
-    key code 53
+    click menu item "Open Mindmap" of m
+    delay 3
+    log ("windows after Open Mindmap: " & (count of windows))
   end tell
 end tell
 OSA
@@ -51,3 +53,7 @@ OSA
 echo "--- the app's output ---"
 head -100 build/smoke.log
 kill "$pid" 2>/dev/null || true
+if grep -q "windows after Open Mindmap: 0" build/click.log; then
+  echo "❌ Open Mindmap in the menu bar menu opened no window"
+  exit 1
+fi

@@ -132,7 +132,7 @@ final class Updater {
     /// naming the update and saying the app restarts. Nothing installs without "Install".
     func confirmInstall() {
         guard let plan = available else { return }
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         let alert = NSAlert()
         alert.messageText = "Install this update?"
         var info = "\(plan.title)\n\nMindmap quits and opens again on the new version; your maps stay as they are."

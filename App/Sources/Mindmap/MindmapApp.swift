@@ -54,6 +54,9 @@ final class AppModel {
     let updater = Updater()
     private var ollama = OllamaLauncher()
     private var shortcut: GlobalShortcut?
+    /// SwiftUI's `openWindow`, handed over by the menu (only a view can get it), so anything here
+    /// that shows the window also opens it when it's closed.
+    @ObservationIgnored var openMainWindow: (() -> Void)?
 
     init() {
         session = MapSession.demo(.typical)
@@ -63,6 +66,15 @@ final class AppModel {
         shortcut = GlobalShortcut { [weak self] text in
             Task { @MainActor in self?.capture(text) }
         }
+        // Closing the window puts the app back in the menu bar only (no Dock icon).
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            guard (note.object as? NSWindow).map(Self.isMainWindow) == true else { return }
+            MainActor.assumeIsolated { _ = NSApp.setActivationPolicy(.accessory) }
+        }
+    }
+
+    nonisolated static func isMainWindow(_ window: NSWindow) -> Bool {
+        window.identifier?.rawValue.hasPrefix("main") == true
     }
 
     func capture(_ text: String) {
@@ -73,9 +85,15 @@ final class AppModel {
         showWindow()
     }
 
+    /// Opens the window (or brings it back) in front of other apps. A menu bar-only app can't come
+    /// to the front, so while the window is open the app is a regular one, with a Dock icon.
     func showWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true || $0.title == "Mindmap" })?.makeKeyAndOrderFront(nil)
+        openMainWindow?()
+        NSApp.setActivationPolicy(.regular)
+        DispatchQueue.main.async {
+            NSApp.activate()
+            NSApp.windows.first(where: Self.isMainWindow)?.makeKeyAndOrderFront(nil)
+        }
     }
 
     func open(_ url: URL) {
@@ -130,7 +148,8 @@ struct MenuBarMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Open Mindmap") { openWindow(id: "main"); model.showWindow() }
+        let _ = model.openMainWindow = { [openWindow] in openWindow(id: "main") }
+        Button("Open Mindmap") { model.showWindow() }
         Divider()
         Button("New map from clipboard") { model.newFromClipboard() }
         Button("Open folder…") { model.openFolder() }

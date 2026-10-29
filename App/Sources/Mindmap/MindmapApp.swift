@@ -7,8 +7,11 @@ struct MindmapApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        MenuBarExtra("Mindmap", systemImage: "point.3.connected.trianglepath.dotted") {
+        MenuBarExtra {
             MenuBarMenu(model: model)
+        } label: {
+            // An update waiting shows on the icon.
+            Image(systemName: model.updater.available == nil ? "point.3.connected.trianglepath.dotted" : "arrow.down.circle")
         }
         Window("Mindmap", id: "main") {
             MainWindow(model: model)
@@ -48,12 +51,15 @@ struct MindmapApp: App {
 final class AppModel {
     var session: MapSession?
     var openPanels: Set<Panel> = [.context]
+    let updater = Updater()
     private var ollama = OllamaLauncher()
     private var shortcut: GlobalShortcut?
 
     init() {
         session = MapSession.demo(.typical)
         ollama.startIfInstalled()
+        Notifier.shared.start { [weak self] in self?.updater.install() }
+        updater.start()
         shortcut = GlobalShortcut { [weak self] text in
             Task { @MainActor in self?.capture(text) }
         }
@@ -142,6 +148,36 @@ struct MenuBarMenu: View {
             }
         }
         Divider()
+        UpdateMenuItems(updater: model.updater)
+        Divider()
         Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+}
+
+/// What this copy is, and checking for, installing or retrying an update.
+struct UpdateMenuItems: View {
+    let updater: Updater
+
+    var body: some View {
+        if Updater.canUpdate {
+            switch updater.state {
+            case .idle, .upToDate:
+                Button(updater.state == .upToDate ? "Up to date: check again" : "Check for updates") { updater.check(userInitiated: true) }
+            case .checking:
+                Text("Checking for updates…")
+            case let .available(plan):
+                Button(plan.title) { updater.install() }
+            case let .installing(step):
+                Text(step)
+            case let .failed(message):
+                Text(message)
+                Button("Try again") { updater.check(userInitiated: true) }
+                Button("Copy error report") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(Updater.report(message), forType: .string)
+                }
+            }
+        }
+        Text(updater.versionLine)
     }
 }

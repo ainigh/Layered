@@ -4,7 +4,7 @@ The whole behaviour of the app as a pure Swift package with no UI import: milest
 
 ```
 swift build      # zero warnings
-swift test       # 77 tests, about a second
+swift test       # 81 tests, about a second
 ```
 
 | Module | What it does | Spec section |

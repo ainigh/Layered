@@ -5,14 +5,22 @@ import Foundation
 public enum Demo {
     public enum Map: String, CaseIterable, Sendable { case tiny, typical, large }
 
+    /// The package's resource bundle. A signed app carries it in Contents/Resources (codesign
+    /// refuses anything loose beside Contents/), where SwiftPM's `Bundle.module` doesn't look.
+    static var resources: Bundle {
+        if let url = Bundle.main.resourceURL?.appendingPathComponent("Harness_Harness.bundle"),
+           let bundle = Bundle(url: url) { return bundle }
+        return Bundle.module
+    }
+
     public static func log(_ map: Map) -> String {
-        guard let url = Bundle.module.url(forResource: map.rawValue, withExtension: "mm", subdirectory: "Demo"),
+        guard let url = resources.url(forResource: map.rawValue, withExtension: "mm", subdirectory: "Demo"),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return text
     }
 
     public static func text(_ map: Map) -> String {
-        guard let url = Bundle.module.url(forResource: map.rawValue, withExtension: "txt", subdirectory: "Demo"),
+        guard let url = resources.url(forResource: map.rawValue, withExtension: "txt", subdirectory: "Demo"),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return text
     }

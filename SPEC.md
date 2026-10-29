@@ -437,3 +437,21 @@ Ana reviews the paper.
 
 **Optimize in the notation drawer.** The drawer’s top right has **Optimize**: it applies an edit still waiting, rewrites the log as the canonical form (the old log is archived), tidies the text to match, and says how many lines it saved.
 
+
+## Adding from the bottom, live maps, renaming on the map (2026-10-29)
+
+**The capture bar.** The bottom centre of the map holds what goes into the context: **Text or audio** opens the Add panel over the map (a **Text** tab to paste or type an item, with **Add to Context** or **Add and send to the map**, and an **Audio** tab, the drop zone and steps described above), **Record** and **Live map**. The Context pane no longer has its own box or **Add audio…**; what is added still lands there as items, and Context opens on a new one. What the model is working on (its kind, time, tokens and **Stop**, ⌘.) and the sentence walk show just above the bar, not under the action bar; so does a recording being transcribed (click it for its steps).
+
+**Record.** Records the microphone (asked for the first time; the audio is written as it comes, AAC 16 kHz mono). **Stop** hands the recording to the same steps as a dropped file: transcribed, speakers found, kept in the project, added as an Audio item.
+
+**Live map.** Records, and every ten seconds of audio (cut at the quietest moment of the last second and a half, so no word is split) whisper transcribes what was said on the Mac, it is added as an Audio item and goes through Extract at once, so the map grows while you talk. While the model works the recording carries on and the next piece is simply longer; silence is skipped (whisper invents words in it). Each piece is timed from the start of the recording; when it stops, the recording is kept once in the project's `audio/` folder under every item it became (hard links), so each plays from its own moment. The bar shows the time, a level meter, what it is doing and the last words heard.
+
+**Send on each item.** Submit has left the action bar: each item in Context has a send button that puts what is new or edited in it on the map (selecting it first if it was not); ⌘↩ still submits every selected item that is waiting. An item on the map shows a check instead.
+
+**Renaming on the map.** A selected node has ✎ between ⓘ and ✦; it (or **Rename…** in the node's menu) asks for the new name. A name another node already has would merge the two (their links and notes join), so the prompt says so and renames only when asked again (**Rename and merge**).
+
+**Unlinked nodes first.** Up to three nodes linked to nothing at all are laid out at the very top of the map, so they are seen and linked; the trees follow, largest first, and any further unlinked nodes stay at the bottom.
+
+**The menu bar icon and updates.** Clicking the icon opens the window, or closes it when it is open in front. A right-click (or ⌃-click) shows a short menu: projects, demos, the version, Quit. Checking for, installing or retrying an update is at the end of the window's status bar.
+
+**Projects in a grid.** The project list is a grid of tiles, the most recently changed first.

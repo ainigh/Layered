@@ -23,11 +23,12 @@ enum Panel: String, CaseIterable, Identifiable {
     var defaultWidth: Double { self == .prompt || self == .settings ? 400 : 340 }
 }
 
-/// The one window: the map fills it, with its action bar at the top. The Context list
-/// floats over its left side and the details and other panels over its right, each opened
-/// from a pill in its top corner (as Notation opens from the bottom left), so the map never
-/// moves when a panel opens. A thin status bar below. Opening something over the map closes
-/// both sides until it closes.
+/// The one window: the map fills it, with its action bar at the top and, at the bottom
+/// centre, the bar that adds text or audio (or records) with what the model is doing above
+/// it. The Context list floats over its left side and the details and other panels over its
+/// right, each opened from a pill in its top corner (as Notation opens from the bottom
+/// left), so the map never moves when a panel opens. A thin status bar below, with updates.
+/// Opening something over the map closes both sides until it closes.
 struct MainWindow: View {
     @Bindable var model: AppModel
 
@@ -67,7 +68,7 @@ struct ProjectChooser: View {
             }
         }
         .padding(Theme.Space.xl)
-        .frame(maxWidth: 520)
+        .frame(maxWidth: 760)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Map.background)
     }
@@ -94,11 +95,12 @@ struct ProjectChooser: View {
             Text("No projects yet. Name one above, or try a demo.").font(Theme.body).foregroundStyle(.secondary)
         } else {
             ScrollView {
-                VStack(spacing: 2) {
-                    ForEach(all) { project in ProjectRow(project: project) { model.open(project) } }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: Theme.Space.s)], spacing: Theme.Space.s) {
+                    ForEach(all) { project in ProjectTile(project: project) { model.open(project) } }
                 }
+                .padding(2)
             }
-            .frame(maxHeight: 340)
+            .frame(maxHeight: 420)
         }
         HStack(spacing: Theme.Space.s) {
             Text("Try a demo:").font(Theme.caption).foregroundStyle(.secondary)
@@ -119,30 +121,39 @@ struct ProjectChooser: View {
     }
 }
 
-/// One project in the chooser: click to open it.
-struct ProjectRow: View {
+/// One project in the chooser's grid: click to open it.
+struct ProjectTile: View {
     let project: Workspace.Project
     let open: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: open) {
-            HStack(spacing: Theme.Space.s) {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
                 Image(systemName: project.isDemo ? "play.rectangle" : "point.3.connected.trianglepath.dotted")
-                    .foregroundStyle(Theme.accent).frame(width: 20)
-                Text(project.name).font(Theme.body)
-                Spacer()
-                if project.modified > .distantPast {
-                    Text(project.modified, format: .relative(presentation: .named)).font(Theme.caption).foregroundStyle(.secondary)
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(Theme.accent)
+                Spacer(minLength: 0)
+                Text(project.name).font(Theme.label).lineLimit(2).multilineTextAlignment(.leading)
+                Group {
+                    if project.modified > .distantPast {
+                        Text(project.modified, format: .relative(presentation: .named))
+                    } else {
+                        Text(project.isDemo ? "Demo" : "Empty")
+                    }
                 }
-                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+                .font(Theme.caption).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.s)
-            .background(hover ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
-            .contentShape(Rectangle())
+            .padding(Theme.Space.m - 4)
+            .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
+            .background(hover ? Color.primary.opacity(0.08) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radiusLarge).strokeBorder(hover ? Theme.accent.opacity(0.5) : Color.primary.opacity(0.08)))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.radiusLarge))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .animation(Theme.selection, value: hover)
+        .help("Open \(project.name)")
     }
 }
 
@@ -184,6 +195,7 @@ struct MapWindow: View {
                 side(.leading)
                 side(.trailing)
                 MapActionBar(session: session)
+                CaptureBar(session: session)
                 if let overlay = session.overlay {
                     MapOverlay(session: session, overlay: overlay)
                         .transition(.opacity)
@@ -219,6 +231,10 @@ struct MapWindow: View {
             // The ⓘ beside a selected node opens its details; selecting alone stays on the map.
             withAnimation(Theme.slide) { model.show(.details, session: session) }
         }
+        .onChange(of: session.contextRequests) { _, _ in
+            // A new item from the Add panel: Context opens on it, with its send button.
+            withAnimation(Theme.slide) { model.show(.context, session: session) }
+        }
         .onChange(of: session.selectedEdge) { _, edge in
             if edge != nil { withAnimation(Theme.slide) { model.show(.details, session: session) } }
         }
@@ -247,7 +263,7 @@ struct MapWindow: View {
     @ViewBuilder
     private func panelBody(_ panel: Panel) -> some View {
         switch panel {
-        case .context: ContextPanel(session: session, addAudio: { model.pickAudio() })
+        case .context: ContextPanel(session: session)
         case .details: DetailsPanel(session: session)
         case .outline: OutlinePanel(session: session)
         case .prompt: PromptPanel(session: session)
@@ -485,6 +501,7 @@ struct StatusBar: View {
             Label("\(c.unsupportedNodes.count)", systemImage: "circle.dashed").help("Ideas no sentence supports")
             Label("\(c.uncoveredSentences.count)", systemImage: "text.badge.xmark").help("Sentences with no idea on the map")
             Label("Local only", systemImage: "lock.fill").foregroundStyle(.green).help("Nothing leaves this Mac")
+            UpdateStatus(updater: model.updater)
         }
         .labelStyle(StatusLabelStyle())
         .font(Theme.caption)
@@ -493,6 +510,46 @@ struct StatusBar: View {
         .frame(height: 26)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// Updates, at the end of the status bar: check, install what was found, or what went wrong.
+struct UpdateStatus: View {
+    let updater: Updater
+
+    var body: some View {
+        if Updater.canUpdate {
+            HStack(spacing: Theme.Space.xs) {
+                switch updater.state {
+                case .idle, .upToDate:
+                    Button { updater.check(userInitiated: true) } label: {
+                        Label(updater.state == .upToDate ? "Up to date" : "Check for updates", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .help(updater.state == .upToDate ? "\(updater.versionLine). Click to check again" : updater.versionLine)
+                case .checking:
+                    ProgressView().controlSize(.mini)
+                    Text("Checking for updates…")
+                case let .available(plan):
+                    Button { updater.confirmInstall() } label: { Label(plan.title + "…", systemImage: "arrow.down.circle.fill") }
+                        .foregroundStyle(Theme.accent)
+                        .help("Review the update; nothing installs until you say so")
+                case let .installing(step):
+                    ProgressView().controlSize(.mini)
+                    Text(step).lineLimit(1)
+                case let .failed(message):
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(message).lineLimit(1).truncationMode(.tail).frame(maxWidth: 220).help(message)
+                    Button("Try again") { updater.check(userInitiated: true) }
+                    Button("Copy error report") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(Updater.report(message), forType: .string)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+        } else {
+            Text(updater.versionLine).lineLimit(1)
+        }
     }
 }
 

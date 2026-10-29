@@ -2,10 +2,11 @@ import AppKit
 import Harness
 import Observation
 
-/// The menu bar icon and its menu, made with AppKit's `NSStatusItem`. SwiftUI's `MenuBarExtra`
-/// drew an icon that ignored clicks on some Macs (as tool-mac-tool-run found; its AppKit icon
-/// works there). The menu is built again each time it opens, so it always shows the current maps
-/// and update state.
+/// The menu bar icon, made with AppKit's `NSStatusItem`. SwiftUI's `MenuBarExtra` drew an icon
+/// that ignored clicks on some Macs (as tool-mac-tool-run found; its AppKit icon works there).
+/// A click opens the window, or closes it when it is open; updates live in the window's status
+/// bar. A right-click (or ⌃-click) shows a short menu, built again each time it opens so it
+/// shows the current projects, and Quit.
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -17,8 +18,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         super.init()
         menu.delegate = self
         menu.autoenablesItems = false
-        item.menu = menu
-        item.button?.toolTip = "Mindmap"
+        item.button?.toolTip = "Mindmap: click to open or close; right-click for more"
+        item.button?.target = self
+        item.button?.action = #selector(clicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         refreshIcon()
     }
 
@@ -33,6 +36,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Mindmap")
         image?.isTemplate = true
         item.button?.image = image
+    }
+
+    @objc private func clicked() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            // The menu shows only while it is attached; detached again when it closes, so a
+            // plain click goes back to toggling the window.
+            item.menu = menu
+            item.button?.performClick(nil)
+        } else {
+            model.toggleWindow()
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        item.menu = nil
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -53,34 +72,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             add(map.rawValue.capitalized, to: demos) { $0.openDemo(map) }
         }
         menu.addItem(.separator())
-        addUpdateItems(to: menu)
-        menu.addItem(.separator())
+        note(model.updater.versionLine, in: menu)
         add("Quit", key: "q", to: menu) { _ in NSApp.terminate(nil) }
-    }
-
-    /// What this copy is, and checking for, installing or retrying an update.
-    private func addUpdateItems(to menu: NSMenu) {
-        let updater = model.updater
-        if Updater.canUpdate {
-            switch updater.state {
-            case .idle, .upToDate:
-                add(updater.state == .upToDate ? "Up to date: check again" : "Check for updates", to: menu) { $0.updater.check(userInitiated: true) }
-            case .checking:
-                note("Checking for updates…", in: menu)
-            case let .available(plan):
-                add(plan.title + "…", to: menu) { $0.updater.confirmInstall() }
-            case let .installing(step):
-                note(step, in: menu)
-            case let .failed(message):
-                note(message, in: menu)
-                add("Try again", to: menu) { $0.updater.check(userInitiated: true) }
-                add("Copy error report", to: menu) { _ in
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(Updater.report(message), forType: .string)
-                }
-            }
-        }
-        note(updater.versionLine, in: menu)
     }
 
     // MARK: - Items

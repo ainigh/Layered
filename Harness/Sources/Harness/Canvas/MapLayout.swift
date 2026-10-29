@@ -9,7 +9,8 @@ import Foundation
 ///
 /// Roots are the nodes nothing points at, the best-connected first; a breadth-first walk
 /// along outgoing and undirected edges hangs every other node under the first node that
-/// reaches it. Edges the trees do not use (cycles, second parents) are cross-links, drawn
+/// reaches it. Up to three nodes linked to nothing sit at the very top; the trees follow,
+/// largest first. Edges the trees do not use (cycles, second parents) are cross-links, drawn
 /// dashed. A node with `@pos` keeps that place (its centre) and its edges follow it.
 ///
 /// A node from the context or the user (`src text` or `src user`) is open: its icon above
@@ -37,6 +38,8 @@ public struct MapLayout: Equatable, Sendable {
         /// Vertical space between sibling subtrees, and between trees.
         public static let siblingGap = 12.0
         public static let treeGap = 28.0
+        /// How many nodes linked to nothing are drawn first, at the top; the rest come last.
+        public static let unlinkedFirst = 3
         /// Horizontal space between depth columns: at least `minColumnGap`, more for labels.
         public static let minColumnGap = 56.0
         public static let maxColumnGap = 260.0
@@ -213,7 +216,11 @@ public struct MapLayout: Equatable, Sendable {
         for id in order where depth[id] == nil { grow(id) }
         // Larger trees first, so the map opens on its main structure and strays come last;
         // branches are numbered in that order, top to bottom.
-        let sortedRoots = roots.enumerated().sorted { ($0.element.size, $1.offset) > ($1.element.size, $0.offset) }.map(\.element.id)
+        var sortedRoots = roots.enumerated().sorted { ($0.element.size, $1.offset) > ($1.element.size, $0.offset) }.map(\.element.id)
+        // Except the first few nodes linked to nothing at all: they go at the very top, where
+        // they are seen (and linked) rather than lost under the map.
+        let unlinked = sortedRoots.filter { degree[$0] == nil }.sorted().prefix(Metrics.unlinkedFirst)
+        sortedRoots = Array(unlinked) + sortedRoots.filter { !unlinked.contains($0) }
         var branch: [NodeID: Int] = [:]
         var branches = 0
         func paint(_ id: NodeID, _ b: Int) {

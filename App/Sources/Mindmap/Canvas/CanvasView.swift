@@ -11,7 +11,7 @@ import Harness
 ///   + − 0, arrows         zoom, fit, move        hover a node  its card, its links drawn heavier
 ///   drag a node           pin it there (`@pos`)  ⌥-drag        link it to another node
 ///   ⇧-drag                select a box           right-click   the node's actions
-///   click a node          select it: ⓘ beside it opens its details, ✦ expands it
+///   click a node          select it: ⓘ beside it opens its details, ✎ renames it, ✦ expands it
 ///   F, ✦                  fill the view          spacing       the least room between nodes
 ///
 /// The map fits the view when it opens and refits as the window resizes or the map grows,
@@ -105,7 +105,7 @@ struct CanvasView: View {
                 }
                 if layout.nodes.isEmpty { EmptyMap() }
                 if let turn = session.viewingTurn {
-                    // Bottom centre: the top of the map holds the action bar.
+                    // Bottom centre, above the capture bar: the top of the map holds the action bar.
                     VStack {
                         Spacer()
                         HStack(spacing: Theme.Space.s) {
@@ -117,6 +117,7 @@ struct CanvasView: View {
                         .floatingBar(in: Capsule())
                     }
                     .padding(Theme.Space.m)
+                    .padding(.bottom, 52)
                 }
                 HStack(alignment: .bottom, spacing: Theme.Space.s) {
                     SpacingBar(spacing: $spacing) { fillView(restart: true) }
@@ -157,9 +158,12 @@ struct CanvasView: View {
                 }
             }
             .sheet(isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
-                TextPrompt(title: "Rename “\(renameTarget ?? "")”", placeholder: "new name", text: $renameText) {
-                    if let old = renameTarget { session.dispatch(.rename(old, to: renameText)); session.selection = [Canonicaliser.canonical(renameText)] }
-                    renameTarget = nil
+                if let old = renameTarget {
+                    RenamePrompt(old: old, text: renameText, exists: { session.state.graph.node($0) != nil }) { new in
+                        session.dispatch(.rename(old, to: new))
+                        session.selection = [Canonicaliser.canonical(new)]
+                        renameTarget = nil
+                    }
                 }
             }
             .sheet(isPresented: Binding(get: { commentTarget != nil }, set: { if !$0 { commentTarget = nil } })) {
@@ -390,9 +394,10 @@ struct CanvasView: View {
     }
 
     /// A round button drawn on the map: ✓ or ✕ for something waiting for review, or ⓘ
-    /// (details on the right) and ✦ (expand, staying on the map) beside a selected node.
+    /// (details on the right), ✎ (rename) and ✦ (expand, staying on the map) beside a
+    /// selected node.
     private struct MapButton {
-        enum Kind { case accept, reject, details, expand }
+        enum Kind { case accept, reject, details, rename, expand }
         let at: CGPoint
         let kind: Kind
         var node: String?
@@ -402,7 +407,7 @@ struct CanvasView: View {
     }
 
     /// ✓ ✕ above a node's top right corner, or under a link's label (on its curve when it
-    /// has none); ⓘ ✦ down the right side of each selected node.
+    /// has none); ⓘ ✎ ✦ down the right side of each selected node.
     private func mapButtons(_ layout: MapLayout, _ v: Viewport) -> [MapButton] {
         guard session.viewingTurn == nil else { return [] }
         let r = MapButton.radius
@@ -427,8 +432,9 @@ struct CanvasView: View {
                 guard let p = layout[name] else { continue }
                 let side = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.h / 2))
                 let x = side.x + r + 6
-                out.append(MapButton(at: CGPoint(x: x, y: side.y - r - 1), kind: .details, node: name))
-                out.append(MapButton(at: CGPoint(x: x, y: side.y + r + 1), kind: .expand, node: name, enabled: session.running == nil))
+                out.append(MapButton(at: CGPoint(x: x, y: side.y - 2 * r - 2), kind: .details, node: name))
+                out.append(MapButton(at: CGPoint(x: x, y: side.y), kind: .rename, node: name))
+                out.append(MapButton(at: CGPoint(x: x, y: side.y + 2 * r + 2), kind: .expand, node: name, enabled: session.running == nil))
             }
         }
         return out
@@ -442,6 +448,7 @@ struct CanvasView: View {
         case .accept: ink = .green; symbol = "checkmark"
         case .reject: ink = .red; symbol = "xmark"
         case .details: ink = Theme.accent; symbol = "info"
+        case .rename: ink = Theme.accent; symbol = "pencil"
         case .expand: ink = Theme.accent; symbol = "sparkles"
         }
         var layer = ctx
@@ -466,6 +473,7 @@ struct CanvasView: View {
             case (.accept, nil, let key?): session.accept(edge: key)
             case (.reject, nil, let key?): session.reject(edge: key)
             case (.details, let name?, _): session.selection = [name]; session.detailsRequests += 1
+            case (.rename, let name?, _): renameText = name; renameTarget = name
             case (.expand, let name?, _): session.expand(name)
             default: break
             }
@@ -844,7 +852,7 @@ struct EmptyMap: View {
         VStack(spacing: Theme.Space.s) {
             Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 34, weight: .light)).foregroundStyle(.tertiary)
             Text("No map yet").font(Theme.title)
-            Text("Add text or audio in Context and press Submit,\nor drop a text or audio file here.").font(Theme.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text("Add text or audio below, then send it from Context,\nor drop a text or audio file here.").font(Theme.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .padding(Theme.Space.l)
         .allowsHitTesting(false)
@@ -878,6 +886,47 @@ struct HoverCard: View {
         .padding(.horizontal, Theme.Space.s + 2)
         .padding(.vertical, Theme.Space.s)
         .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusSmall + 2))
+    }
+}
+
+/// Rename a node. A name another node already has would merge the two, so it asks first.
+struct RenamePrompt: View {
+    let old: String
+    @State var text: String
+    let exists: (String) -> Bool
+    let rename: (String) -> Void
+    /// The taken name the user was warned about; OK again merges.
+    @State private var clash: String?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            Text("Rename “\(old)”").font(Theme.title)
+            TextField("new name", text: $text).textFieldStyle(.roundedBorder).onSubmit(commit)
+            if let clash {
+                HStack(alignment: .top, spacing: Theme.Space.s) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text("“\(clash)” is already on the map. Renaming merges the two into one node, with the links and notes of both. Rename anyway?")
+                        .font(Theme.caption).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(clash == nil ? "Rename" : "Rename and merge", action: commit).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(Theme.Space.l)
+        .frame(width: 380)
+        .onChange(of: text) { _, _ in clash = nil }
+    }
+
+    private func commit() {
+        let target = Canonicaliser.canonical(text)
+        guard !target.isEmpty, target != old else { dismiss(); return }
+        if exists(target), clash != target { clash = target; return }
+        rename(text)
+        dismiss()
     }
 }
 

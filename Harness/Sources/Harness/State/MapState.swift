@@ -34,6 +34,8 @@ public struct MapState: Equatable, Sendable {
     public var suggestions: [[String]] = []
     /// Lines the reducer could not apply (should not happen for harness-made lines).
     public var errors: [String] = []
+    /// The last model run: raw output, token use, whether the grammar was used.
+    public var lastRun: ModelRun?
 
     public init() {}
 
@@ -97,6 +99,8 @@ public enum Action: Equatable, Sendable {
     case submitText(String)
     /// Run model output through the gate and append what passes.
     case applyModelOutput(String, prompt: PromptKind, textID: Int?, about: String)
+    /// Append what a finished `ModelRun` produced (the gate already ran while streaming).
+    case applyRun(ModelRun, about: String)
     /// Append lines the user chose (a suggestion, an applied Verify proposal, an imported `.mm`).
     case applyLines([String], what: String)
     case rename(String, to: String)
@@ -121,6 +125,12 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
         state.heldBack = result.events
         state.suggestions = result.deferred
         state.appendTurn(who: "model", what: "\(prompt.rawValue) \(about)", lines: result.lines, now: now)
+
+    case .applyRun(let run, let about):
+        state.heldBack = run.gate.events
+        state.suggestions = run.gate.deferred
+        state.lastRun = run
+        state.appendTurn(who: "model", what: "\(run.kind.rawValue) \(about)", lines: run.gate.lines, now: now)
 
     case .applyLines(let lines, let what):
         state.appendTurn(who: "user", what: what, lines: lines, now: now)

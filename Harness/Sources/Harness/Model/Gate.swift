@@ -89,98 +89,16 @@ public struct Gate: Sendable {
     }
 
     public func run(_ output: String, graph: Graph, evidence: EvidenceStore) -> GateResult {
-        var result = GateResult()
-        var scratch = graph
-        var known = Set(graph.rootNames)
-        var appended = 0
-        let parser = Parser(options: .strict)
-
+        var session = GateSession(gate: self, graph: graph, evidence: evidence)
         for (number, text) in Text.numberedLines(output) where !text.isEmpty {
-            let raw = text
-            guard raw.hasPrefix("|") else {
-                if options.prompt == .dedupe, !raw.hasPrefix("```") {
-                    // A dedupe reason is a comment under its `old = new` line.
-                    result.lines.append(raw)
-                } else if !raw.hasPrefix("```") {
-                    result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "not a statement"))
-                }
-                continue
-            }
-
-            // 1. Parse (after the workflow's normalisation of `-|`).
-            let normalised = raw.replacingOccurrences(of: " -|", with: " - |")
-            let statement: Statement
-            do {
-                switch try parser.parseLine(normalised, number: number) {
-                case .statement(let s): statement = s
-                case .comment, .scope:
-                    result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "the model may not change scopes"))
-                    continue
-                }
-            } catch let error as NotationError {
-                result.events.append(GateEvent(kind: .dropped, raw: raw, reason: error.message))
-                result.parseFailures.append((raw, error.description))
-                continue
-            } catch {
-                result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "\(error)"))
-                continue
-            }
-
-            var reasons: [String] = []
-            let emitted: [String]
-            switch statement {
-            case .edit(let edit):
-                guard let lines = gateEdit(edit, known: known, reasons: &reasons) else {
-                    result.events.append(GateEvent(kind: .dropped, raw: raw, reason: reasons.joined(separator: "; ")))
-                    continue
-                }
-                emitted = lines
-            case .path(let path):
-                guard options.prompt != .dedupe else {
-                    result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "Dedupe may only propose `old = new` lines"))
-                    continue
-                }
-                guard let lines = gatePath(path, known: &known, evidence: evidence, reasons: &reasons) else {
-                    result.events.append(GateEvent(kind: .dropped, raw: raw, reason: reasons.joined(separator: "; ")))
-                    continue
-                }
-                emitted = lines
-            }
-
-            // 4. Duplicates: a line that adds nothing to the canonical form is dropped.
-            var trial = scratch
-            let before = Canonical.render(trial)
-            do {
-                for line in emitted { try trial.apply(try parser.parseLine(line)) }
-            } catch {
-                result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "gate produced an invalid line: \(error)"))
-                continue
-            }
-            if Canonical.render(trial) == before {
-                result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "already in the map"))
-                continue
-            }
-
-            // 6. Budget.
-            if let budget = options.budget, appended >= budget {
-                result.deferred.append(emitted)
-                result.events.append(GateEvent(kind: .deferred, raw: raw, result: emitted, reason: "over the budget of \(budget) lines per call"))
-                continue
-            }
-
-            scratch = trial
-            appended += 1
-            result.lines += emitted
-            if emitted != [raw] {
-                result.events.append(GateEvent(kind: .rewritten, raw: raw, result: emitted, reason: reasons.isEmpty ? "normalised" : reasons.joined(separator: "; ")))
-            }
+            session.feed(text, number: number)
         }
-        return result
+        return session.result
     }
 
     // MARK: - Edits
 
-    private func gateEdit(_ edit: Edit, known: Set<String>, reasons: inout [String]) -> [String]? {
+    func gateEdit(_ edit: Edit, known: Set<String>, reasons: inout [String]) -> [String]? {
         guard let new = edit.new else {
             reasons.append("deleting is a user action; the model may only merge with `old = new`")
             return nil
@@ -202,7 +120,7 @@ public struct Gate: Sendable {
 
     // MARK: - Paths
 
-    private func gatePath(_ input: Path, known: inout Set<String>, evidence: EvidenceStore, reasons: inout [String]) -> [String]? {
+    func gatePath(_ input: Path, known: inout Set<String>, evidence: EvidenceStore, reasons: inout [String]) -> [String]? {
         var path = input
 
         // 2. Names.
@@ -341,5 +259,114 @@ public struct Gate: Sendable {
 
     static func matchable(_ s: String) -> String {
         Text.collapse(String(s.lowercased().map { $0.isLetter || $0.isNumber ? $0 : " " }))
+    }
+}
+
+/// A gate that checks lines one at a time as they stream in from the model.
+public struct GateSession: Sendable {
+    public let gate: Gate
+    public private(set) var result = GateResult()
+    private var scratch: Graph
+    private let evidence: EvidenceStore
+    private var known: Set<String>
+    private var appended = 0
+    private let parser = Parser(options: .strict)
+
+    public init(gate: Gate, graph: Graph, evidence: EvidenceStore) {
+        self.gate = gate
+        self.scratch = graph
+        self.evidence = evidence
+        self.known = Set(graph.rootNames)
+    }
+
+    /// The graph as it stands with every kept line applied.
+    public var graph: Graph { scratch }
+
+    /// Feeds one raw line. Returns the lines it produced (empty when held back).
+    @discardableResult
+    public mutating func feed(_ text: String, number: Int = 0) -> [String] {
+        let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return [] }
+        let options = gate.options
+        guard raw.hasPrefix("|") else {
+            if raw.hasPrefix("```") { return [] }
+            if options.prompt == .dedupe {
+                result.lines.append(raw)
+                return [raw]
+            }
+            result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "not a statement"))
+            return []
+        }
+
+        // 1. Parse (after the workflow's normalisation of `-|`).
+        let normalised = raw.replacingOccurrences(of: " -|", with: " - |")
+        let statement: Statement
+        do {
+            switch try parser.parseLine(normalised, number: number) {
+            case .statement(let s): statement = s
+            case .comment, .scope:
+                result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "the model may not change scopes"))
+                return []
+            }
+        } catch let error as NotationError {
+            result.events.append(GateEvent(kind: .dropped, raw: raw, reason: error.message))
+            result.parseFailures.append((raw, error.description))
+            return []
+        } catch {
+            result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "\(error)"))
+            return []
+        }
+
+        var reasons: [String] = []
+        let emitted: [String]
+        switch statement {
+        case .edit(let edit):
+            guard let lines = gate.gateEdit(edit, known: known, reasons: &reasons) else {
+                result.events.append(GateEvent(kind: .dropped, raw: raw, reason: reasons.joined(separator: "; ")))
+                return []
+            }
+            emitted = lines
+        case .path(let path):
+            guard options.prompt != .dedupe else {
+                result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "Dedupe may only propose `old = new` lines"))
+                return []
+            }
+            var trialKnown = known
+            guard let lines = gate.gatePath(path, known: &trialKnown, evidence: evidence, reasons: &reasons) else {
+                result.events.append(GateEvent(kind: .dropped, raw: raw, reason: reasons.joined(separator: "; ")))
+                return []
+            }
+            known = trialKnown
+            emitted = lines
+        }
+
+        // 4. Duplicates: a line that adds nothing to the canonical form is dropped.
+        var trial = scratch
+        let before = Canonical.render(trial)
+        do {
+            for line in emitted { try trial.apply(try parser.parseLine(line)) }
+        } catch {
+            result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "gate produced an invalid line: \(error)"))
+            return []
+        }
+        if Canonical.render(trial) == before {
+            result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "already in the map"))
+            return []
+        }
+
+        // 6. Budget.
+        if let budget = options.budget, appended >= budget {
+            result.deferred.append(emitted)
+            result.events.append(GateEvent(kind: .deferred, raw: raw, result: emitted, reason: "over the budget of \(budget) lines per call"))
+            return []
+        }
+
+        scratch = trial
+        appended += 1
+        result.lines += emitted
+        if emitted != [raw] {
+            result.events.append(GateEvent(kind: .rewritten, raw: raw, result: emitted, reason: reasons.isEmpty ? "normalised" : reasons.joined(separator: "; ")))
+        }
+        return emitted
     }
 }

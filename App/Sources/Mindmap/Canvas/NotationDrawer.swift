@@ -10,7 +10,7 @@ import Harness
 /// archived) and tidies the text to match.
 struct NotationDrawer: View {
     @Bindable var session: MapSession
-    @State private var open = false
+    @Bindable var model: AppModel
     @State private var tab: Tab = .notation
     /// Bumped by Optimize; the editor applies what is waiting, optimizes and reloads.
     @State private var optimizeRequests = 0
@@ -21,7 +21,7 @@ struct NotationDrawer: View {
         let held = session.state.heldBack.count
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Spacer()
-            if open {
+            if model.notationOpen {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack {
                         Picker("", selection: $tab) {
@@ -51,13 +51,13 @@ struct NotationDrawer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             Button {
-                withAnimation(Theme.slide) { open.toggle() }
+                model.toggleNotation()
             } label: {
                 HStack(spacing: Theme.Space.xs) {
                     Image(systemName: "chevron.left.forwardslash.chevron.right")
                     Text("Notation")
                     if held > 0 { Text("· \(held) held back").foregroundStyle(.secondary) }
-                    Image(systemName: open ? "chevron.down" : "chevron.up").font(.system(size: 9, weight: .bold))
+                    Image(systemName: model.notationOpen ? "chevron.down" : "chevron.up").font(.system(size: 9, weight: .bold))
                 }
                 .font(Theme.label)
                 .padding(.horizontal, Theme.Space.m - 4)

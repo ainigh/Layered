@@ -246,7 +246,12 @@ final class Updater {
             try? fm.moveItem(at: previous, to: app)
             throw Problem("couldn't restart into the new copy: \(error.localizedDescription)")
         }
-        DispatchQueue.main.async { MainActor.assumeIsolated { NSApp.terminate(nil) } }
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                AppModel.shared.quittingForUpdate = true
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     nonisolated static func downloadPrebuilt(_ release: GitHubRelease, into scratch: URL) throws -> URL {

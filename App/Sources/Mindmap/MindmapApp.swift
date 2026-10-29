@@ -50,6 +50,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AppModel.shared.start()
         }
     }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let quit = MainActor.assumeIsolated { AppModel.shared.shouldQuit() }
+        return quit ? .terminateNow : .terminateCancel
+    }
 }
 
 /// App-wide state: the maps folder and the open project's session, the window.
@@ -59,10 +64,20 @@ final class AppModel {
     static let shared = AppModel()
 
     var session: MapSession?
+    /// Projects left while they were still working (another was opened, or the list, or the
+    /// window was closed on them): they carry on, and each is let go once it is done. Opening
+    /// one again picks it up where it is.
+    var background: [MapSession] = []
+    @ObservationIgnored private var watching: Task<Void, Never>?
+    /// Set by the updater, which quits to swap the app: no asking then.
+    @ObservationIgnored var quittingForUpdate = false
     /// The folder the user keeps their maps in; each folder inside is a project.
     var workspace: Workspace?
-    /// The panel each side pane shows; a side with none is closed.
+    /// The panel each side pane shows; a side with none is closed. One floating panel is
+    /// open at a time: a side pane or the Notation drawer.
     var shownPanels: [PanelPlacement.Edge: Panel] = [.leading: .context]
+    /// The Notation drawer, in the map's bottom left corner, is open.
+    var notationOpen = false
     /// What a closed pane showed last, so opening it again brings that back.
     @ObservationIgnored private var lastShown: [PanelPlacement.Edge: Panel] = [.leading: .context, .trailing: .details]
     /// The panes an overlay closed, to bring back when it closes.
@@ -117,23 +132,32 @@ final class AppModel {
         showWindow()
     }
 
-    /// Opens `panel` in the pane on its side.
+    /// Opens `panel` in the pane on its side; whatever else floated over the map closes.
     func show(_ panel: Panel, session: MapSession) {
-        shownPanels[panel.edge] = panel
+        shownPanels = [panel.edge: panel]
+        notationOpen = false
         lastShown[panel.edge] = panel
     }
 
-    /// Something opened over the map: both panes close, to come back when it closes.
-    func coverPanes() {
-        covered = shownPanels
-        withAnimation(Theme.slide) { shownPanels = [:] }
+    /// Opens or closes the Notation drawer; opening it closes the side panes.
+    func toggleNotation() {
+        withAnimation(Theme.slide) {
+            notationOpen.toggle()
+            if notationOpen { shownPanels = [:] }
+        }
     }
 
-    /// The overlay closed: the panes it closed come back, unless the user opened others since.
+    /// Something opened over the map: the panes and the drawer close; the panes come back when it closes.
+    func coverPanes() {
+        covered = shownPanels
+        withAnimation(Theme.slide) { shownPanels = [:]; notationOpen = false }
+    }
+
+    /// The overlay closed: the pane it closed comes back, unless the user opened another since.
     func uncoverPanes() {
         guard let covered else { return }
         withAnimation(Theme.slide) {
-            for (edge, panel) in covered where shownPanels[edge] == nil { shownPanels[edge] = panel }
+            if shownPanels.isEmpty, !notationOpen { shownPanels = covered }
         }
         self.covered = nil
     }
@@ -153,7 +177,9 @@ final class AppModel {
                 shownPanels[edge] = nil
             } else {
                 let docked = Panel.allCases.filter { $0.edge == edge }
-                shownPanels[edge] = lastShown[edge].flatMap { docked.contains($0) ? $0 : nil } ?? docked.first
+                // One floating panel at a time: the other side and the drawer close.
+                shownPanels = [edge: lastShown[edge].flatMap { docked.contains($0) ? $0 : nil } ?? docked.first ?? .context]
+                notationOpen = false
             }
         }
     }
@@ -194,12 +220,84 @@ final class AppModel {
     }
 
     func open(_ url: URL) {
+        let folder = RecentMaps.resolve(url)
+        // Open already, or working in the background: the same session, so two never write one folder.
+        if let open = existing(folder) {
+            switchTo(open)
+            showWindow()
+            return
+        }
         do {
-            session = try MapSession.open(folder: RecentMaps.resolve(url))
+            switchTo(try MapSession.open(folder: folder))
             showWindow()
         } catch {
             NSAlert(error: error).runModal()
         }
+    }
+
+    // MARK: - Work in the background
+
+    /// Opens a project that is working in the background, where it is.
+    func show(_ other: MapSession) {
+        switchTo(other)
+        showWindow()
+        if let folder = other.folder { UserDefaults.standard.set(folder.lastPathComponent, forKey: WorkspaceStore.lastProject) }
+    }
+
+    /// The session working on a project, if one is.
+    func session(workingOn project: Workspace.Project) -> MapSession? {
+        working.first { existing(project.url) === $0 }
+    }
+
+    /// Every project working now, the open one first.
+    var working: [MapSession] { ([session].compactMap { $0 } + background).filter(\.isBusy) }
+
+    /// Shows `next`. The project left keeps working in the background when it is busy.
+    private func switchTo(_ next: MapSession?) {
+        if let current = session, current !== next, current.isBusy, !background.contains(where: { $0 === current }) {
+            background.append(current)
+            watchBackground()
+        }
+        if let next { background.removeAll { $0 === next } }
+        session = next
+    }
+
+    private func existing(_ folder: URL) -> MapSession? {
+        let path = folder.standardizedFileURL.resolvingSymlinksInPath().path
+        return ([session].compactMap { $0 } + background).first { $0.folder?.standardizedFileURL.resolvingSymlinksInPath().path == path }
+    }
+
+    /// Lets each background project go once it is done, and says so in a notification.
+    private func watchBackground() {
+        guard watching == nil else { return }
+        watching = Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: .seconds(1))
+                guard let model = self else { return }
+                for done in model.background where !done.isBusy {
+                    let body = done.lastError.map { "\($0.message): \($0.raw)" } ?? "Finished what it was working on."
+                    Notifier.post(title: done.title, body: body)
+                }
+                model.background.removeAll { !$0.isBusy }
+                if model.background.isEmpty {
+                    model.watching = nil
+                    return
+                }
+            }
+        }
+    }
+
+    /// Asked before quitting: quitting stops what the projects are doing, closing the window does not.
+    func shouldQuit() -> Bool {
+        let working = working
+        guard !quittingForUpdate, !working.isEmpty else { return true }
+        let alert = NSAlert()
+        alert.messageText = working.count == 1 ? "\(working[0].title) is still working" : "\(working.count) projects are still working"
+        alert.informativeText = working.map { "\($0.title): " + $0.work.map(\.text).joined(separator: ", ") }.joined(separator: "\n")
+            + "\n\nQuitting stops it. Close the window instead and it carries on from the menu bar."
+        alert.addButton(withTitle: "Keep Working")
+        alert.addButton(withTitle: "Quit Anyway")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     /// Opens a project and remembers it for next time.
@@ -210,7 +308,7 @@ final class AppModel {
 
     /// The window shows the projects to pick from (or make).
     func showProjects() {
-        session = nil
+        switchTo(nil)
         showWindow()
     }
 
@@ -241,7 +339,7 @@ final class AppModel {
     /// A demo is a project too: made in the maps folder the first time, opened after.
     func openDemo(_ map: Demo.Map) {
         guard let workspace else {
-            session = MapSession.demo(map)
+            switchTo(MapSession.demo(map))
             showWindow()
             return
         }

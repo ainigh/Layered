@@ -93,6 +93,30 @@ final class MapSession {
     /// Transcription progress for the status bar, while a recording is being added.
     var transcribing: Double? { audioJob?.running == true ? audioJob?.fraction ?? 0 : nil }
     var isDemo: Bool { if case .demo = mode { return true } else { return false } }
+    /// The project's folder (a demo opened without a maps folder has none).
+    var folder: URL? { if case .folder(let url) = mode { return url } else { return nil } }
+
+    /// What this project is doing that carries on while another project is open or the
+    /// window is closed: a recording, a transcription, a sentence walk, the model.
+    var work: [Work] {
+        var all: [Work] = []
+        if let recording {
+            all.append(Work(id: "recording", symbol: recording.live ? "waveform.and.mic" : "mic.fill",
+                            text: recording.live ? "Live map · \(recording.texts.count) on the map" : "Recording", since: recording.started))
+        }
+        if let job = audioJob, job.running {
+            all.append(Work(id: "audio", symbol: "waveform", text: "Transcribing \(job.file.lastPathComponent)", fraction: job.fraction))
+        }
+        if let walk = sentenceWalk, !walk.paused {
+            all.append(Work(id: "walk", symbol: "list.number", text: "Sentence \(walk.index + 1) of \(walk.sentences.count)", fraction: walk.progress))
+        }
+        if let running {
+            all.append(Work(id: "model", symbol: "cpu", text: running.rawValue.capitalized, since: runningSince))
+        }
+        return all
+    }
+
+    var isBusy: Bool { !work.isEmpty }
 
     var title: String {
         switch mode {
@@ -791,6 +815,20 @@ enum Overlay: Equatable {
     case text
     /// Add audio: a drop zone, then the recording's steps as it is transcribed.
     case audio
+}
+
+/// The lists of what is working tell projects apart by their session.
+extension MapSession: Identifiable {}
+
+/// One thing a project is doing, for the lists of what is working (the project list, the status bar).
+struct Work: Identifiable, Equatable {
+    let id: String
+    let symbol: String
+    let text: String
+    /// How far along, when that is known.
+    var fraction: Double?
+    /// When it started, to say how long it has been going.
+    var since: Date?
 }
 
 /// A recording from the microphone under way.

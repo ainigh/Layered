@@ -489,3 +489,11 @@ Ana reviews the paper.
 **Delete from the list.** Each item in Context has a trash button beside Open (the row's menu still has **Delete** too). As before, a deleted item leaves the list and the context the model reads; it stays in `context.md`, its ideas stay on the map, and **n deleted** at the top of the list shows it again with **Restore**.
 
 **Every icon a name matches.** A node whose name matches several icons shows them all, side by side, each overlapping the next by about 40% and drawn over it (the first word's icon on top), each on a disc of the map's background so the one beneath is hidden there and a part of each shows. Up to three are drawn; more add a “+n”. The layout makes the node as wide as its stack and links meet the stack's sides. A card stacks its small glyphs the same way before its name, and Details shows the stack. A node's `@icon` still means that one icon only. Filler words (about, after, each…) never match.
+
+## Icon colours from the name, names wrap, a hairline selection (2026-10-29)
+
+**Icon colours from the name.** Some words in a node's name colour its icons, in a few distinct colours: red for urgent, danger, critical, error, blocker, bug, outage…; orange for warning, risk, deadline, overdue, priority, issue…; yellow for idea, draft, pending, todo, review…; green for done, complete, success, approved, resolved, fixed…; blue for info, note, plan, reference…; purple for creative, vision, experiment, research…; pink for love, heart, favourite…; gray for archived, deprecated, cancelled, paused, on hold…. A colour's own name counts too ("red flag"). Words of several colours: the most pressing wins, in that order. No such word: the icon keeps its kind's or branch's colour. The name's text keeps its colour; only the icons (on the map, on cards and in Details) change.
+
+**Names wrap past three words.** A name of more than three words is broken into lines of at most three, as evenly as they go (four words: two and two; five: three and two), up to three lines, the last taking what is left (cut with "…" past the usual width). The node is as tall as its lines; the SVG export wraps the same way.
+
+**A hairline selection.** A selected node's ring is a 0.5 pt line over a faint tint of the accent (cards too), instead of a 2 pt line.

@@ -44,7 +44,7 @@ struct NodeDetails: View {
                 // Its icons stacked as on the map, the first on top.
                 HStack(spacing: -12) {
                     ForEach(Array(symbols.enumerated()), id: \.offset) { i, symbol in
-                        Image(systemName: symbol).font(.system(size: Theme.Map.iconSize)).foregroundStyle(Theme.kind(kind))
+                        Image(systemName: symbol).font(.system(size: Theme.Map.iconSize)).foregroundStyle(IconTint.of(name).map(Theme.tint) ?? Theme.kind(kind))
                             .frame(width: 32, height: 32)
                             .background { if symbols.count > 1 { Circle().fill(.background) } }
                             .zIndex(Double(symbols.count - i))

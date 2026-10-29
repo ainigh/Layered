@@ -54,6 +54,17 @@ final class CanvasTests: XCTestCase {
         XCTAssertEqual(IconManifest.fallbackSymbol(kind: nil), "circle")
     }
 
+    func testIconTintFromTheName() {
+        XCTAssertEqual(IconTint.of("Urgent fix"), .red)
+        XCTAssertEqual(IconTint.of("server errors"), .red, "singularised")
+        XCTAssertEqual(IconTint.of("Red flag"), .red, "a colour's own name")
+        XCTAssertEqual(IconTint.of("launch deadline"), .orange)
+        XCTAssertEqual(IconTint.of("migration done"), .green)
+        XCTAssertEqual(IconTint.of("done, but a blocker"), .red, "the most pressing wins")
+        XCTAssertEqual(IconTint.of("archived notes"), .blue, "blue comes before gray")
+        XCTAssertNil(IconTint.of("team offsite"))
+    }
+
     func testIconLibrary() throws {
         let library = IconLibrary.builtIn
         XCTAssertGreaterThan(library.count, 500)

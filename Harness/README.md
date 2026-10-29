@@ -1,10 +1,10 @@
 # Harness
 
-Milestone 1 of `SPEC.md`: the whole behaviour of the app as a pure Swift package with no UI import.
+The whole behaviour of the app as a pure Swift package with no UI import: milestones 1–7 of `SPEC.md` minus the views.
 
 ```
 swift build      # zero warnings
-swift test       # 36 tests, under a second
+swift test       # 77 tests, about a second
 ```
 
 | Module | What it does | Spec section |
@@ -16,6 +16,11 @@ swift test       # 36 tests, under a second
 | `Model/Canonicaliser` | Name normal form (lowercase, article-free, singular), resolution against existing names (exact, variant, edit distance ≤ 2), and the cheap duplicate pass. | SPEC “Name stability” |
 | `Model/Gate` | The six checks before append: parse, names, proof, duplicates, provenance, budget. Returns the lines to append, the over-budget suggestions, and a `GateEvent` for every change or drop, so nothing is silently altered. | SPEC “Checks before append” |
 | `State/MapState` | `MapState` + `Action` → `MapState` via `reduce`. User actions compile to notation (`old = new`, `name =`, `@pos`, `@src user`, comment after statement); model output goes through the gate. The log is append-only by construction: it has no setter and only `appendTurn` adds to it. | SPEC “Development approach”, “Editing, history” |
+| `State/History` | `Transition.lines(from:to:)` takes one graph to another by appending only, which is how undo and redo work; Coverage, Proof, Dedupe (cheap pass + model proposals), Outline. | SPEC “Editing, history”, “Coverage”, “Duplicates” |
+| `Model/Prompts`, `Grammar`, `ModelClient`, `OllamaClient`, `ModelRunner` | Six default prompts with per-folder overrides; the tightened GBNF with the name alternation; streaming Ollama client and a fixture client that replays recordings; the runner feeds lines to the gate as they stream, falls back when the grammar is rejected, and retries failed lines once. | SPEC “Model layer” |
+| `Model/Transcript` | Transcripts with timestamps and speakers into the evidence store; Transcriber and Diarizer protocols; the speaker map from clarification answers. | SPEC “Audio”, “Clarification” |
+| `Storage/` | `MapStorage` protocol (folder and in-memory), the append-only context document, submit modes, `Persistence` (load a folder, append what each action added, Optimize, branch). | SPEC “Storage” |
+| `Canvas/` | Deterministic force layout with heading clusters and pins; icon manifest matching; exports (canonical, Markdown, JSON, SVG); demo fixtures and recordings. | SPEC “Canvas”, “Icons”, “Export” |
 
 ## Conventions the harness fixes
 
@@ -29,3 +34,8 @@ These are decisions the spec left open or that did not survive contact with the 
 - **Model-written `@src user`** becomes `guess`: only the user confirms.
 - **Cross-scope edges in the canonical form** are listed under the later of their two scopes, so both exist when the file is read back.
 - **`@turn` headers** are comments in the log but are not part of the canonical form.
+- **Canvas state** (viewport, panel layout, collapsed headings) lives in `ui.json`, not a `| @ _ui` scope: the base notation has no line that returns to the root scope, so a scope line in the log would capture every line after it.
+- **Canonical form groups by heading**, with attached comments beside their statements, so Optimize keeps the outline. A note on a node declared under one heading is listed under that heading.
+- **Every submitted paragraph, transcript, clarification answer and chat message is a text** with its own id and evidence, so facts stated in answers get proof too.
+- **Undo of a label or direction** that cannot be removed in the notation rebuilds the affected node (delete, then re-emit its lines from the snapshot). `Transition` verifies the result and falls back to a full rebuild when the incremental diff is not exact.
+- **Deleting an edge** from the canvas uses the same rebuild, because the notation removes edges only with a node.

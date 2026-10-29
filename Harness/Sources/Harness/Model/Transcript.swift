@@ -68,7 +68,7 @@ public struct Transcript: Equatable, Sendable, Codable {
 
 /// Runs whisper on a file. The app implements it with whisper.cpp; tests use a fixture.
 public protocol Transcriber: Sendable {
-    func transcribe(_ audio: URL, model: String, progress: @Sendable (Double) -> Void) async throws -> Transcript
+    func transcribe(_ audio: URL, model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> Transcript
 }
 
 /// Assigns `Speaker n` labels to segments. The app tries a local pipeline; tests use a fixture.
@@ -85,7 +85,7 @@ public struct FixtureTranscriber: Transcriber, Diarizer {
         self.labels = labels
     }
 
-    public func transcribe(_ audio: URL, model: String, progress: @Sendable (Double) -> Void) async throws -> Transcript {
+    public func transcribe(_ audio: URL, model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> Transcript {
         progress(1)
         var t = transcript
         t.model = model

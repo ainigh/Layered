@@ -4,7 +4,7 @@ The whole behaviour of the app as a pure Swift package with no UI import: milest
 
 ```
 swift build      # zero warnings
-swift test       # 87 tests, about a second
+swift test       # 100 tests, about two seconds
 ```
 
 | Module | What it does | Spec section |
@@ -19,7 +19,7 @@ swift test       # 87 tests, about a second
 | `State/History` | `Transition.lines(from:to:)` takes one graph to another by appending only, which is how undo and redo work; Coverage, Proof, Dedupe (cheap pass + model proposals), Outline. | SPEC “Editing, history”, “Coverage”, “Duplicates” |
 | `Model/Prompts`, `Grammar`, `ModelClient`, `OllamaClient`, `ModelRunner` | Six default prompts with per-folder overrides; the tightened GBNF with the name alternation; streaming Ollama client and a fixture client that replays recordings; the runner feeds lines to the gate as they stream, falls back when the grammar is rejected, and retries failed lines once. | SPEC “Model layer” |
 | `Model/Transcript` | Transcripts with timestamps and speakers into the evidence store; Transcriber and Diarizer protocols; the speaker map from clarification answers. | SPEC “Audio”, “Clarification” |
-| `Storage/` | `MapStorage` protocol (folder and in-memory), the append-only context document, submit modes, `Persistence` (load a folder, append what each action added, Optimize, branch). | SPEC “Storage” |
+| `Storage/` | `MapStorage` protocol (folder and in-memory), the append-only context document and its items (versions, selection, delete, restore, on the map), submit modes, `Persistence` (load a folder, append what each action added, Optimize, branch). | SPEC “Storage” |
 | `Canvas/` | `MapLayout`, the tree layout the canvas draws (GridClip’s map: roots, branches, columns, cross-links, pins) and `MapPalette`, its colours; the older force layout (kept for its tests); icon manifest matching; exports (canonical, Markdown, JSON, SVG drawn like the canvas); demo fixtures and recordings. | SPEC “Canvas”, “Icons”, “Export” |
 
 ## Conventions the harness fixes
@@ -39,3 +39,7 @@ These are decisions the spec left open or that did not survive contact with the 
 - **Every submitted paragraph, transcript, clarification answer and chat message is a text** with its own id and evidence, so facts stated in answers get proof too.
 - **Undo of a label or direction** that cannot be removed in the notation rebuilds the affected node (delete, then re-emit its lines from the snapshot). `Transition` verifies the result and falls back to a full rebuild when the incremental diff is not exact.
 - **Deleting an edge** from the canvas uses the same rebuild, because the notation removes edges only with a node.
+- **Context items are records in `context.md`.** A text record that reuses an item number is a new version; `selected`, `deselected`, `removed`, `restored` and `extracted` are body-less event records. An item's text enters the evidence store when it is added; `extracted` marks which version went through Extract. Old paragraphs without item numbers are items numbered in file order, already on the map.
+- **Model requests read the selected items** (`MapState.modelTexts`), unless a request names its texts (sentence mode, Ask me about one item). A state with no context reads all evidence, as before.
+- **A model reply is never proof.** Its text is in the evidence store so it can be read when selected, but the gate checks against `proofEvidence`, which leaves replies out, and coverage does not count them.
+- **Open and boxed nodes.** `MapLayout` sizes `src text`/`user` nodes (and nodes with no `src`) as an icon above the name, and places edge ends beside the icon (`anchorY`, `anchorInset`); `world`, `guess` and `advice` are cards.

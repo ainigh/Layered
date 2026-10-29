@@ -334,3 +334,72 @@ Snapshot tests replace most UI tests: a view is a function of a fixture state, s
 5. **Audio and clarification.** whisper.cpp transcription with timestamps, speaker diarization, Clarify prompt and panel, play-from-proof.
 6. **History, outline, quality tools.** Turns, snapshots, undo/redo, heading comments, Outline panel, Dedupe, Verify, Optimize.
 7. **Polish.** Streaming highlights, keyboard shortcuts, global capture shortcut, export, demo mode without a folder, icon packs.
+
+## Update 2026-10-29: the context as a list, actions on the map, details on the right
+
+From using the app. This section supersedes the earlier text where they differ: the Text window in Core concepts, the Context, Clarify, Proof and Chat rows of the Panels table, Node rendering, and the Chat prompt’s trigger.
+
+**Context items.** The left pane holds the context and nothing else. At its top, a box to paste or type new text (**Add text**) and **Add audio…**; below, every item, scrollable, oldest first. Each text added, recording transcribed, clarification answered and reply the model wrote is an item, and once added it stays one. An item shows where it came from (You, Audio, Clarification, Model), when, whether it was edited, and whether it is on the map yet.
+
+- **Click to select or deselect.** Selected items are the current context: every model request (Submit, Expand, Ask, Ask me, Check coverage) reads only them. Deselecting replaces deleting for “not now”: the item and its ideas stay, the model just stops reading it. New items start selected; model replies start deselected.
+- **Open over the map.** An item’s open button shows it over the map and closes both panes; they come back when it closes (click outside, the close button or Esc). There it can be read in full, edited, deselected, sent to the map, asked about (**Ask me about this** runs Clarify on that item alone), or deleted.
+- **Edit.** Text you added, and model replies, are edited in the overlay. **Save** (or closing) keeps the edit as a new version of the item; the old version stays in `context.md` and the evidence store, so proof that cites it still resolves. An edited item is back in line for Submit, which sends only the paragraphs that changed since the version on the map. Editing a model reply makes it yours: it becomes a typed item, selected.
+- **Audio.** **Add audio…** (or a drop on the map) transcribes on the Mac; the transcript joins the list as an Audio item with the recording. Selected, it can be played whole or line by line from the overlay, each line from the moment it was said. A transcript cannot be edited, so text and recording stay in step; a correction or anything to add (who is speaking, where, what a word means) is a clarification, which is a new item. Speakers are named in the overlay, and each name set is a clarification item too.
+- **Delete** hides an item from the list; “n deleted” shows them again with **Restore**. Its ideas stay on the map; **Forget its ideas** (the item’s menu) removes the nodes whose only support is that item, as “forget text n” did.
+- An item’s menu also has **Select its ideas on the map** and **Submit to the map**.
+
+**Actions on the map.** The buttons that sat at the top of the Context panel now float at the top of the map: **Submit** (with the number of selected items that are new or edited), **Check coverage**, **Ask me**, and a box to ask the model or tell it what to add. Options (one sentence at a time; Ask me reads the context only) are in the bar’s menu. Most asks change the map: lines the model writes are applied as before (`world` or `advice`, through the gate). When the reply has prose, it opens over the map and joins the list as a Model item, tinted and striped in the model’s colour so it is never mistaken for what you added or what was recorded. Ask me’s questions and Check coverage’s report open over the map as well; each answer is a clarification item. The Chat and Clarify panels are gone: their work is the ask box, the overlays and the list.
+
+**Details on the right.** Clicking a node opens the right pane on **Details**: the node’s icon and name, its kind and provenance, then its proof sentences as its description. Each sentence names the item it came from (click to open it over the map) and, for audio, plays the moment it was said. A node with no proof says why (world knowledge, a guess, advice, or yours). Then its notes and comments, its links (click to go to the other node), and Expand or Confirm. Several nodes show the union of their proof; an edge shows its own. The right pane keeps Outline, History, Prompt and Settings as tabs; panels no longer move between sides.
+
+**Node and edge rendering**
+
+| Node | Drawn as |
+| --- | --- |
+| `src text` (from typed, pasted or recorded context) or `src user` (typed or edited by you) | no box: its icon on top, its name below; the icon is set at twice the name’s size; a root’s name is semibold; `src user` keeps a small pencil by the icon; edges meet the icon’s sides |
+| `src world` | a card with a cool blue fill, dashed outline and globe badge |
+| `src guess` | a card with a grey fill, dotted outline and question-mark badge, faded |
+| `src advice` | a card with a warm fill, double outline and lightbulb badge |
+
+Edge labels are a step smaller than node notes (10.5 pt) and set in the secondary grey, their notes in the tertiary. The SVG export draws the same.
+
+**How it is kept (append-only still holds)**
+
+Every item change is a record appended to `context.md`; nothing is rewritten:
+
+```
+[item 3 · text 7 · typed · 2026-10-29T10:00:00Z]
+Kim chairs the workshop.
+
+[item 4 · text 8 · model · re: who reviews? · 2026-10-29T10:01:00Z]
+Ana reviews the paper.
+
+[item 3 · typed · deselected · 2026-10-29T10:02:00Z]
+
+[item 3 · text 7 · typed · extracted · 2026-10-29T10:03:00Z]
+
+```
+
+- A text record with an item number already used is a new version of that item. Event records (`selected`, `deselected`, `removed`, `restored`, `extracted`) have no body.
+- An item’s text goes into the evidence store when it is added, not when it is submitted, so Ask me and Check coverage can read it before Submit. `extracted` records which version went through Extract; Submit sends what is selected and not yet extracted.
+- A `context.md` from before items reads as before: each paragraph is an item, numbered in file order, already on the map.
+- A body line that would read as a record header is written with a leading space and read back without it.
+- Harness actions: `submitText` (add), `submitTranscript`, `addReply`, `reviseContext`, `selectContext`, `removeContext`, `restoreContext`, `markExtracted`; `ContextDocument.items`, `pendingItems`, `selectedTexts`; `Submit.request(for:)`; `MapState.modelTexts` and `proofEvidence`.
+
+**Gaps closed in this update**
+
+| Gap | Decision |
+| --- | --- |
+| Deleting an item vs append-only | Delete is a `removed` record: the item is hidden, restorable, and its ideas stay on the map until you forget them |
+| Editing vs proof | Each save is a new version with its own text id; nodes keep pointing at the sentences they came from |
+| What “selected” changes | Only what the model reads (all requests) and what coverage counts; the map is untouched |
+| Model prose in the context | A reply is an item marked `model`, deselected at first, labelled “your earlier reply, not evidence” when the model reads it, never cited as proof by the gate, never extracted (its lines arrive through its ```mm block) and never counted by coverage |
+| The question you asked | Kept with the reply (“You asked: …”) rather than added to the context, so an instruction like “add the risks” is not extracted as a fact; add it as an item if it is one |
+| A dropped recording was never extracted (Submit diffed it away) | A transcript is an item like any other: selected and waiting for Submit |
+| Ask me could not see unsubmitted text | Items have evidence from the moment they are added |
+| An overlay closes both panes | They come back when it closes, unless you opened others meanwhile |
+| Correcting a transcript | Not by editing: add a clarification, a new item, or name the speakers |
+| One sentence at a time over several items | One walk over their sentences in turn (only what changed), each item marked on the map as its last sentence is done; a failed request pauses the walk, which can be resumed or stopped |
+| Roots without filled cards | Most roots are now open nodes; a root’s name is set semibold instead |
+| Where edges meet an open node | At its icon, level with it, so a long name does not leave a gap |
+| An item you want the model to read once | Select it, ask, deselect it; the list remembers each choice |

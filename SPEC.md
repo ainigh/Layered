@@ -183,7 +183,7 @@ The app runs as a menu bar item. Clicking the icon opens or focuses one main win
 | Chat | message input and model replies; each sent message is appended to the context as a paragraph and extracted |
 | Outline | headings and attached comments as a tree; drag to reorder; click to focus on canvas; “Find duplicates” button with its confirm checklist |
 | Prompt | the six prompts, editable, with “reset to default” and a diff against default |
-| Settings | Ollama host and model picker, whisper model, icon folder, data folder, theme, layout options, global shortcut |
+| Settings | Ollama host and model picker, whisper model, icon folder, data folder, theme (app-wide, also in the status bar), layout options, global shortcut |
 | History | timeline of turns; scrub, undo, redo, Optimize |
 
 **Status.** A thin bar shows the current folder, the model, token use of the last request, and a spinner while the model runs; a model error shows the raw line and the parser message with a “retry” button.
@@ -219,7 +219,8 @@ my-map/
     2.txt
     sentences.jsonl evidence store: {text, s, sentence, t0?, t1?}, append-only, never edited
   audio/
-    2.m4a           dropped recordings, kept as given
+    2.m4a           dropped recordings, kept as given; recordings made in the app too
+    Recording ….m4a a recording made in the app, written as it comes, until its transcript gives it a text id
     2.transcript.json  whisper output with timestamps and speaker labels
   prompts/
     clarify.md      editable prompts; absent file = built-in default
@@ -457,3 +458,12 @@ Ana reviews the paper.
 **Two toggles on the action bar.** The options menu at the end of the action bar is now two buttons, lit while on: **one sentence at a time** and **Ask me reads the context only**.
 
 **Projects in a grid.** The project list is a grid of tiles, the most recently changed first.
+
+## Recordings kept and transcribed whole, light and dark (2026-10-29)
+
+**Every recording is kept.** **Record** and **Live map** write the microphone straight into the project's `audio/` folder, where dropped recordings are kept, as `Recording <date and time>.m4a`, from the first second. When the recording stops it goes through the same steps as a dropped file (transcribed whole, speakers found, added as an Audio item, selected and waiting for its send button), and the file takes its text id's name (`audio/<id>.m4a`). A recording that cannot be transcribed (no speech, whisper fails) stays in `audio/` under its own name, the map says so, and **Try again** in the Audio panel picks it up. A recording that stops while another is being transcribed waits for it.
+
+**A live map ends in one clean transcript.** The live pieces are transcribed ten seconds at a time, which is what lets the map grow while you talk, but a piece has little to go on and words at its edges are cut, so its text slips. When a live map stops (or **Stop now**, or a problem), the whole recording is transcribed again in one go and added as one Audio item, like any other recording. Once it is in, the live pieces leave the current context (deselected, not deleted), so what the model reads from then on, Check coverage included, is the clean transcript, not the pieces' slips. Their ideas stay on the map with their proof; each piece still plays from its own moment (hard links to the same file), and can be selected again. If the whole recording cannot be transcribed, the pieces stay in the context as they were.
+
+**Light and dark.** The end of the status bar has a toggle: **System**, **Light**, **Dark**. It applies to the whole app (the project list too, not only an open map), is kept between launches, and is the same choice as Settings' Theme. The theme in a project's `settings.json` is no longer read.
+

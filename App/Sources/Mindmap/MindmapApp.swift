@@ -45,7 +45,10 @@ struct MindmapApp: App {
 /// the updater, the capture shortcut.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MainActor.assumeIsolated { AppModel.shared.start() }
+        MainActor.assumeIsolated {
+            Appearance.saved.apply()
+            AppModel.shared.start()
+        }
     }
 }
 

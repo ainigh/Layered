@@ -163,3 +163,32 @@ extension NSColor {
         self.init(srgbRed: CGFloat((v >> 16) & 0xff) / 255, green: CGFloat((v >> 8) & 0xff) / 255, blue: CGFloat(v & 0xff) / 255, alpha: 1)
     }
 }
+
+/// Light, dark, or as the Mac is: one choice for the whole app (the project list too),
+/// kept between launches. Chosen at the end of the status bar or in Settings.
+enum Appearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    static let key = "appearance"
+    static var saved: Appearance { Appearance(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .system }
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var symbol: String {
+        switch self {
+        case .system: return "circle.lefthalf.filled"
+        case .light: return "sun.max"
+        case .dark: return "moon"
+        }
+    }
+
+    /// Set on the app rather than as a SwiftUI preference, which would not go back to
+    /// following the Mac once set, and would leave windows without a map as they were.
+    @MainActor func apply() {
+        switch self {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+}

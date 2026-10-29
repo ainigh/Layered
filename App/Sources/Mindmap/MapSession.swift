@@ -47,6 +47,8 @@ final class MapSession {
     var recordingLevel: Float { recorder?.level ?? 0 }
     /// Recordings this session added, by text id (a demo keeps them where they were dropped).
     private var audioFiles: [Int: URL] = [:]
+    /// The recording being added; the next one waits for it.
+    @ObservationIgnored private var audioQueue: Task<Void, Never>?
     var viewingTurn: Int?
     /// What is open over the map: a context item, Ask me's questions, or Check coverage's report.
     var overlay: Overlay?
@@ -287,28 +289,92 @@ final class MapSession {
 
     /// Adds a recording: transcribes it on this Mac, finds its speakers, keeps the file in
     /// the folder, and adds the transcript as a context item. Each step shows in `audioJob`.
-    func dropAudio(_ url: URL) {
+    /// `replacing`: the texts of a live map's pieces, which the whole recording, transcribed
+    /// in one go, takes the place of in the context.
+    func dropAudio(_ url: URL, replacing pieces: [Int] = []) {
         guard audioJob?.running != true else { return }
-        audioJob = AudioJob(file: url, step: .starting)
-        Task {
-            do {
-                var transcript = try await transcriber.transcribe(url, model: settings.whisperModel) { [weak self] step in
-                    Task { @MainActor in self?.audioJob?.advance(step) }
-                }
-                guard !transcript.segments.isEmpty else { throw AudioJob.Problem("No speech was found in \(url.lastPathComponent).") }
-                audioJob?.step = .speakers
-                transcript = (try? await diarizer.diarize(transcript, audio: url)) ?? transcript
-                audioJob?.step = .adding
-                // The id the transcript gets is the one the recording is kept under.
-                let id = state.evidence.nextTextID
-                audioFiles[id] = try storage.storeAudio(id: id, from: url)
-                dispatch(.submitTranscript(transcript))
-                audioJob?.step = .done(item: state.context.item(forText: id)?.id ?? 0)
-            } catch {
-                audioJob?.failedAt = audioJob?.step.rank
-                audioJob?.step = .failed((error as? AudioJob.Problem)?.message ?? (error as? ModelError).map { "\($0)" } ?? error.localizedDescription)
+        addAudio(url, replacing: pieces)
+    }
+
+    /// Queues a recording behind the one being added, if any: a recording that stops while
+    /// a dropped file is transcribed waits for it.
+    private func addAudio(_ url: URL, replacing pieces: [Int] = []) {
+        let previous = audioQueue
+        audioQueue = Task {
+            await previous?.value
+            await transcribeAudio(url, replacing: pieces)
+        }
+    }
+
+    private func transcribeAudio(_ url: URL, replacing pieces: [Int]) async {
+        audioJob = AudioJob(file: url, step: .starting, replacing: pieces)
+        do {
+            var transcript = try await transcriber.transcribe(url, model: settings.whisperModel) { [weak self] step in
+                Task { @MainActor in self?.audioJob?.advance(step) }
+            }
+            guard !transcript.segments.isEmpty else { throw AudioJob.Problem("No speech was found in \(url.lastPathComponent).") }
+            audioJob?.step = .speakers
+            transcript = (try? await diarizer.diarize(transcript, audio: url)) ?? transcript
+            audioJob?.step = .adding
+            // The id the transcript gets is the one the recording is kept under.
+            let id = state.evidence.nextTextID
+            audioFiles[id] = try keepAudio(url, as: id)
+            dispatch(.submitTranscript(transcript))
+            let item = state.context.item(forText: id)?.id ?? 0
+            audioJob?.step = .done(item: item)
+            if !pieces.isEmpty, item != 0 { replaceLivePieces(pieces, with: item) }
+        } catch {
+            audioJob?.failedAt = audioJob?.step.rank
+            let message = (error as? AudioJob.Problem)?.message ?? (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
+            audioJob?.step = .failed(message)
+            if isRecording(url) {
+                notice = Notice(text: "The recording is kept in the project's audio folder, but it could not be transcribed: " + message
+                                + (pieces.isEmpty ? "" : " What the live map heard stays in Context."))
             }
         }
+    }
+
+    /// Where a recording is written as it comes: the project's audio folder, where dropped
+    /// recordings are kept too (a demo's goes to the temporary folder, for the session).
+    private var recordingsFolder: URL {
+        guard case .folder(let root) = mode else { return FileManager.default.temporaryDirectory }
+        return root.appendingPathComponent("audio")
+    }
+
+    /// A recording made here, still under its own name in the project's audio folder.
+    private func isRecording(_ url: URL) -> Bool {
+        guard case .folder = mode else { return false }
+        return url.lastPathComponent.hasPrefix(LiveRecorder.prefix)
+            && url.deletingLastPathComponent().standardizedFileURL.path == recordingsFolder.standardizedFileURL.path
+    }
+
+    /// Keeps a recording under its text id. One made here is already in the project's audio
+    /// folder, so it is renamed rather than copied (the live pieces' hard links still find it).
+    private func keepAudio(_ url: URL, as id: Int) throws -> URL {
+        if isRecording(url) {
+            let target = recordingsFolder.appendingPathComponent("\(id).\(url.pathExtension)")
+            if !FileManager.default.fileExists(atPath: target.path) {
+                try FileManager.default.moveItem(at: url, to: target)
+                return target
+            }
+        }
+        return try storage.storeAudio(id: id, from: url)
+    }
+
+    /// The whole recording is in Context: the live pieces, transcribed ten seconds at a time
+    /// (words cut at the edges, little to go on), leave the context the model reads, so their
+    /// slips go no further. Their ideas stay on the map with their proof, and they can be
+    /// selected again.
+    private func replaceLivePieces(_ pieces: [Int], with item: Int) {
+        var replaced = 0
+        for text in pieces {
+            guard let piece = state.context.item(forText: text), piece.selected, !piece.removed else { continue }
+            dispatch(.selectContext(piece.id, false))
+            replaced += 1
+        }
+        let what = replaced == 1 ? "its live piece" : "its \(replaced) live pieces"
+        notice = Notice(text: "The live map's recording, transcribed in one go, is in Context as item \(item)"
+                        + (replaced > 0 ? " in place of \(what); their ideas stay on the map." : "."), item: item)
     }
 
     // MARK: - Recording
@@ -328,7 +394,7 @@ final class MapSession {
                 lastError = ("Turn it on in System Settings › Privacy & Security › Microphone.", "Mindmap can't use the microphone", nil)
                 return
             }
-            let recorder = LiveRecorder()
+            let recorder = LiveRecorder(in: recordingsFolder)
             do {
                 try recorder.start(keepSamples: live)
             } catch {
@@ -362,7 +428,7 @@ final class MapSession {
         guard !rec.live else { return }
         recording = nil
         self.recorder = nil
-        dropAudio(recorder.url)
+        addAudio(recorder.url)
     }
 
     /// The live loop: waits for enough speech, cuts it at a quiet moment, transcribes it,
@@ -455,21 +521,19 @@ final class MapSession {
         if done { dispatch(.markExtracted(textID: id)) }
     }
 
-    /// The live recording is over: its file is kept in the folder once, under every item it
-    /// became (each plays from its own moment), and the map says how it went.
+    /// The live recording is over: its file, already in the project's audio folder, is kept
+    /// under every item it became (each plays from its own moment), the map says how it went,
+    /// and the whole recording is transcribed again in one go and added as a dropped one is,
+    /// in place of the pieces.
     private func finishLive(_ recorder: LiveRecorder) {
         let ids = recording?.texts ?? []
-        if let first = ids.first, let stored = try? storage.storeAudio(id: first, from: recorder.url) {
-            audioFiles[first] = stored
-            let folder = stored.deletingLastPathComponent()
-            for id in ids.dropFirst() {
-                let link = folder.appendingPathComponent("\(id).\(stored.pathExtension)")
-                // A hard link in the project's audio folder: found again next launch, no extra space.
-                if folder.lastPathComponent == "audio", (try? FileManager.default.linkItem(at: stored, to: link)) != nil {
-                    audioFiles[id] = link
-                } else {
-                    audioFiles[id] = stored
-                }
+        for id in ids {
+            let link = recordingsFolder.appendingPathComponent("\(id).\(recorder.url.pathExtension)")
+            // A hard link in the project's audio folder: found again next launch, no extra space.
+            if isRecording(recorder.url), (try? FileManager.default.linkItem(at: recorder.url, to: link)) != nil {
+                audioFiles[id] = link
+            } else {
+                audioFiles[id] = (try? storage.storeAudio(id: id, from: recorder.url)) ?? recorder.url
             }
         }
         let problem = recording?.problem
@@ -487,7 +551,8 @@ final class MapSession {
             said = ids.count == 1 ? "The live map added the recording as an item and put it on the map."
                 : "The live map added the recording as \(ids.count) items and put them on the map."
         }
-        notice = Notice(text: said)
+        notice = Notice(text: said + " The whole recording is kept and now transcribed in one go for Context.")
+        addAudio(recorder.url, replacing: ids)
     }
 
     /// Opens an item over the map.
@@ -778,6 +843,8 @@ struct AudioJob: Equatable {
 
     let file: URL
     var step: Step
+    /// The live pieces this recording takes the place of in the context, once it is in.
+    var replacing: [Int] = []
     /// The step that failed, to mark it in the panel.
     var failedAt: Int?
 

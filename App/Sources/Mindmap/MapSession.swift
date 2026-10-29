@@ -74,7 +74,7 @@ final class MapSession {
         let client = OllamaClient(host: URL(string: settings.model.host) ?? URL(string: "http://localhost:11434")!, sendGrammar: settings.model.useGrammar)
         let session = MapSession(mode: .folder(folder), state: loaded.state, storage: storage, settings: settings, prompts: loaded.prompts, ui: loaded.ui,
                                  client: client, transcriber: WhisperTranscriber(), diarizer: WhisperDiarizer())
-        session.bookmark = try? folder.bookmarkData(options: .withSecurityScope, includingResourceValues: nil, relativeTo: nil)
+        session.bookmark = try? folder.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
         if let data = try? storage.readIconManifest(), let manifest = try? IconManifest(json: data) { session.icons = manifest }
         RecentMaps.add(folder)
         return session
@@ -329,7 +329,7 @@ enum RecentMaps {
         var list = all().filter { $0 != url }
         list.insert(url, at: 0)
         UserDefaults.standard.set(list.prefix(8).map(\.path), forKey: key)
-        if let data = try? url.bookmarkData(options: .withSecurityScope, includingResourceValues: nil, relativeTo: nil) {
+        if let data = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
             UserDefaults.standard.set(data, forKey: "bookmark:\(url.path)")
         }
     }

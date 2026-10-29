@@ -2,8 +2,9 @@ import AVFoundation
 import Foundation
 
 /// Records the microphone on this Mac: the audio goes to a file as it comes (what the item
-/// plays back) and, for a live map, is kept as 16 kHz mono samples (what whisper reads) until
-/// they have been transcribed. Nothing leaves the Mac.
+/// plays back, and what is transcribed in one go when it stops) and, for a live map, is kept
+/// as 16 kHz mono samples (what whisper reads) until they have been transcribed. Nothing
+/// leaves the Mac.
 @MainActor
 final class LiveRecorder {
     static let rate = 16000
@@ -14,11 +15,16 @@ final class LiveRecorder {
     let url: URL
     private(set) var stopped = false
 
-    init() {
+    /// Writes into `folder`: the project's audio folder, so the recording is kept from its
+    /// first second, whatever happens to its transcription.
+    init(in folder: URL) {
         let stamp = Date().formatted(.dateTime.year().month().day().hour().minute().second())
             .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: ".")
-        url = FileManager.default.temporaryDirectory.appendingPathComponent("Recording \(stamp).m4a")
+        url = folder.appendingPathComponent("\(Self.prefix)\(stamp).m4a")
     }
+
+    /// How a recording made here is named until it is transcribed and takes its text id.
+    static let prefix = "Recording "
 
     /// Asks for the microphone the first time; false when the user said no (or said no before).
     static func permission() async -> Bool {

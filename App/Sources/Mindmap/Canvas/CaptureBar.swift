@@ -28,7 +28,7 @@ struct CaptureBar: View {
             }
             .disabled(recording?.live == true || recording?.stopping == true || (recording == nil && session.audioJob?.running == true))
             CaptureButton(symbol: recording?.live == true ? "stop.fill" : "waveform.and.mic", title: "Live map",
-                          help: recording?.live == true ? (recording?.stopping == true ? "Stop now: what is not on the map yet stays in the recording, unmapped" : "Stop the live map; what was said last still goes on the map") : "Record and map as you talk: every few seconds what was said is transcribed, added to Context and put on the map, while the recording goes on",
+                          help: recording?.live == true ? (recording?.stopping == true ? "Stop now: what is not on the map yet stays in the recording, unmapped" : "Stop the live map; what was said last still goes on the map") : "Record and map as you talk: every few seconds what was said is transcribed, added to Context and put on the map, while the recording goes on; when it stops, the whole recording is kept and transcribed again in one go",
                           lit: recording?.live == true) {
                 if recording?.live == true { session.stopRecording() } else { session.startRecording(live: true) }
             }

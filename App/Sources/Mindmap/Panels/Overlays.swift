@@ -498,7 +498,7 @@ struct AudioOverlay: View {
             switch job.step {
             case .failed(let message):
                 Text(message).font(Theme.caption).foregroundStyle(.red).textSelection(.enabled)
-                Button("Try again") { session.dropAudio(job.file) }.controlSize(.small)
+                Button("Try again") { session.dropAudio(job.file, replacing: job.replacing) }.controlSize(.small)
             case .done(let item):
                 HStack {
                     Text("Added to the context as item \(item), selected and ready to submit.").font(Theme.caption).foregroundStyle(.secondary)

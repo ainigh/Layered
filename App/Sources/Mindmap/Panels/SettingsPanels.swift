@@ -103,7 +103,7 @@ struct SettingsPanel: View {
                 Text("Icons: add SVGs and a manifest.json to icons/ in the folder. \(session.icons.entries.count) keywords loaded.").font(Theme.caption)
             }
             Section("Appearance") {
-                Picker("Theme", selection: $session.settings.theme) { Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark") }.onChange(of: session.settings.theme) { _, _ in save() }
+                ThemePicker()
                 TextField("Global capture shortcut", text: $session.settings.globalShortcut).onSubmit(save)
                 Toggle("Optimize every n turns", isOn: Binding(get: { session.settings.optimizeEveryTurns != nil }, set: { session.settings.optimizeEveryTurns = $0 ? 50 : nil; save() }))
                 if session.settings.optimizeEveryTurns != nil {
@@ -234,5 +234,17 @@ struct ModelPicker: View {
             models = []
             reachable = false
         }
+    }
+}
+
+/// The app's appearance, the same choice as the status bar's toggle.
+struct ThemePicker: View {
+    @AppStorage(Appearance.key) private var appearance: Appearance = .system
+
+    var body: some View {
+        Picker("Theme", selection: $appearance) {
+            ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+        }
+        .onChange(of: appearance) { _, chosen in chosen.apply() }
     }
 }

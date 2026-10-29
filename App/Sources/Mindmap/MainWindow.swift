@@ -37,7 +37,6 @@ struct MainWindow: View {
             MapWindow(session: session, model: model)
                 .id(ObjectIdentifier(session))
                 .navigationTitle(session.title)
-                .preferredColorScheme(session.settings.theme == "light" ? .light : session.settings.theme == "dark" ? .dark : nil)
         } else {
             ProjectChooser(model: model)
                 .navigationTitle("Mindmap")
@@ -508,6 +507,7 @@ struct StatusBar: View {
             Label("\(c.unsupportedNodes.count)", systemImage: "circle.dashed").help("Ideas no sentence supports")
             Label("\(c.uncoveredSentences.count)", systemImage: "text.badge.xmark").help("Sentences with no idea on the map")
             Label("Local only", systemImage: "lock.fill").foregroundStyle(.green).help("Nothing leaves this Mac")
+            AppearanceToggle()
             UpdateStatus(updater: model.updater)
         }
         .labelStyle(StatusLabelStyle())
@@ -597,6 +597,23 @@ struct RecordingStatus: View {
 }
 
 /// Updates, at the end of the status bar: check, install what was found, or what went wrong.
+/// Light, dark, or as the Mac is, in the status bar.
+struct AppearanceToggle: View {
+    @AppStorage(Appearance.key) private var appearance: Appearance = .system
+
+    var body: some View {
+        Picker("Appearance", selection: $appearance) {
+            ForEach(Appearance.allCases) { Image(systemName: $0.symbol).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.mini)
+        .fixedSize()
+        .help("Appearance: \(appearance.title) (system, light, dark)")
+        .onChange(of: appearance) { _, chosen in chosen.apply() }
+    }
+}
+
 struct UpdateStatus: View {
     let updater: Updater
 

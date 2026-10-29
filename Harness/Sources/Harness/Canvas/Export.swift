@@ -68,50 +68,77 @@ public enum Export {
         return try encoder.encode(JSONGraph(nodes: nodes, edges: edges, comments: graph.comments.filter { !$0.isTurnHeader }.map(\.text)))
     }
 
-    /// A plain SVG of the current layout with the provenance styles (SPEC “Node rendering”).
-    public static func svg(_ graph: Graph, layout: Layout) -> String {
-        let b = layout.bounds
-        let w = max(b.maxX - b.minX, 200), h = max(b.maxY - b.minY, 200)
-        var out = ["<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"\(fmt(b.minX)) \(fmt(b.minY)) \(fmt(w)) \(fmt(h))\" font-family=\"-apple-system, Helvetica, sans-serif\" font-size=\"12\">"]
-        out.append("<rect x=\"\(fmt(b.minX))\" y=\"\(fmt(b.minY))\" width=\"\(fmt(w))\" height=\"\(fmt(h))\" fill=\"white\"/>")
-        out.append("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"10\" refY=\"5\" markerWidth=\"8\" markerHeight=\"8\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#666\"/></marker></defs>")
-        for edge in graph.edges.values.sorted(by: { $0.key < $1.key }) {
-            let (from, to) = Canonical.emittingOrder(edge)
-            guard let p = layout.positions[from.name], let q = layout.positions[to.name] else { continue }
-            let (x1, y1, x2, y2) = trim(p, q, graph)
-            var attrs = "stroke=\"#666\" stroke-width=\"1.5\" fill=\"none\""
-            if !edge.isUndirected { attrs += " marker-end=\"url(#arrow)\"" }
-            if edge.isTwoWay { attrs += " marker-start=\"url(#arrow)\"" }
-            if edge.note(kind: "src") == "guess" { attrs += " stroke-dasharray=\"2 3\"" } else if edge.note(kind: "src") == "world" { attrs += " stroke-dasharray=\"6 4\"" }
-            out.append("<line x1=\"\(fmt(x1))\" y1=\"\(fmt(y1))\" x2=\"\(fmt(x2))\" y2=\"\(fmt(y2))\" \(attrs)/>")
-            if !edge.labels.isEmpty {
-                out.append("<text x=\"\(fmt((x1 + x2) / 2))\" y=\"\(fmt((y1 + y2) / 2 - 4))\" text-anchor=\"middle\" fill=\"#444\" font-size=\"10\">\(escape(edge.labels.joined(separator: ", ")))</text>")
+    /// The map as the canvas draws it (GridClip's style): left-to-right trees of cards,
+    /// first-level branches in their own colour, cross-links dashed, provenance on the
+    /// outlines (world dashed, guess dotted and faded, advice warm with a double border).
+    public static func svg(_ graph: Graph, layout: MapLayout, palette: MapPalette = .light) -> String {
+        typealias M = MapLayout.Metrics
+        let pad = 24.0
+        let x0 = layout.minX - pad, y0 = layout.minY - pad
+        let w = max(layout.width + 2 * pad, 200), h = max(layout.height + 2 * pad, 120)
+        var out = ["<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"\(fmt(x0)) \(fmt(y0)) \(fmt(w)) \(fmt(h))\" font-family=\"-apple-system, BlinkMacSystemFont, Helvetica, sans-serif\">"]
+        out.append("<rect x=\"\(fmt(x0))\" y=\"\(fmt(y0))\" width=\"\(fmt(w))\" height=\"\(fmt(h))\" fill=\"\(palette.background)\"/>")
+        out.append("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 1L10 5L0 9z\" fill=\"context-stroke\"/></marker></defs>")
+
+        for e in layout.edges {
+            let ink = palette.hue(e.branch)?.ink ?? palette.textTertiary
+            var attrs = "fill=\"none\" stroke=\"\(ink)\" stroke-width=\"\(e.tree ? 2 : 1.5)\""
+            switch (e.tree, graph.edges[e.key]?.note(kind: "src")) {
+            case (_, "guess"): attrs += " stroke-dasharray=\"2 3\" opacity=\"0.7\""
+            case (_, "world"): attrs += " stroke-dasharray=\"6 4\""
+            case (false, _): attrs += " stroke-dasharray=\"5 4\""
+            default: break
             }
+            if e.arrowEnd { attrs += " marker-end=\"url(#arrow)\"" }
+            if e.arrowStart { attrs += " marker-start=\"url(#arrow)\"" }
+            out.append("<path d=\"M\(fmt(e.p0.x)) \(fmt(e.p0.y))C\(fmt(e.p1.x)) \(fmt(e.p1.y)) \(fmt(e.p2.x)) \(fmt(e.p2.y)) \(fmt(e.p3.x)) \(fmt(e.p3.y))\" \(attrs)/>")
         }
-        for id in graph.nodes.keys.sorted() where id.scope.isEmpty {
-            guard let p = layout.positions[id.name], let node = graph.nodes[id] else { continue }
-            let r = Layout.radius(degree: graph.degree(of: id))
+
+        for n in layout.nodes {
+            guard let node = graph.nodes[n.id] else { continue }
             let src = node.note(kind: "src") ?? "text"
-            let (dash, fill, opacity) = style(src)
-            let colour = kindColour(node.note(kind: "kind"))
-            let stroke = src == "advice" ? "stroke=\"\(colour)\" stroke-width=\"3\"" : "stroke=\"\(colour)\" stroke-width=\"1.5\""
-            out.append("<g opacity=\"\(opacity)\">")
-            out.append(shape(node.note(kind: "kind"), x: p.x, y: p.y, r: r, extra: "fill=\"\(fill)\" \(stroke)\(dash)"))
-            if src == "advice" { out.append(shape(node.note(kind: "kind"), x: p.x, y: p.y, r: r - 4, extra: "fill=\"none\" stroke=\"\(colour)\" stroke-width=\"1\"")) }
-            out.append("<text x=\"\(fmt(p.x))\" y=\"\(fmt(p.y + 4))\" text-anchor=\"middle\" fill=\"#111\">\(escape(id.name))</text>")
+            let isRoot = n.depth == 0
+            let ink = palette.hue(n.branch)?.ink
+            let fill = isRoot ? palette.root : (src == "advice" ? palette.advice : palette.card)
+            var stroke = isRoot ? "stroke=\"none\"" : "stroke=\"\(ink ?? palette.outline)\" stroke-width=\"\(ink == nil ? 1 : 1.5)\""
+            if src == "world" { stroke += " stroke-dasharray=\"5 4\"" } else if src == "guess" { stroke += " stroke-dasharray=\"2 3\"" }
+            out.append("<g class=\"node\" transform=\"translate(\(fmt(n.x)) \(fmt(n.y)))\"\(src == "guess" ? " opacity=\"0.7\"" : "")>")
+            out.append("<rect width=\"\(fmt(n.w))\" height=\"\(fmt(n.h))\" rx=\"8\" fill=\"\(fill)\" \(stroke)/>")
+            if src == "advice" {
+                out.append("<rect x=\"3\" y=\"3\" width=\"\(fmt(n.w - 6))\" height=\"\(fmt(n.h - 6))\" rx=\"5\" fill=\"none\" stroke=\"\(ink ?? palette.outline)\" stroke-width=\"1\"/>")
+            }
+            var textX = M.padX
+            let nameY = M.padY + M.nameLine / 2
+            if n.glyph {
+                out.append("<circle cx=\"\(fmt(textX + 5))\" cy=\"\(fmt(nameY))\" r=\"4.5\" fill=\"\(kindColour(node.note(kind: "kind")))\"/>")
+                textX += M.glyph
+            }
+            let primary = isRoot ? palette.onRoot : palette.textPrimary
+            let secondary = isRoot ? palette.onRoot : palette.textSecondary
+            out.append("<text x=\"\(fmt(textX))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" font-size=\"13\" font-weight=\"500\" fill=\"\(primary)\">\(escape(n.name))</text>")
+            if n.badge {
+                let mark = ["world": "◎", "guess": "?", "advice": "✦", "user": "✎"][src] ?? ""
+                out.append("<text x=\"\(fmt(n.w - M.padX - M.badge / 2 + 3))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11\" fill=\"\(secondary)\">\(mark)</text>")
+            }
+            for (i, note) in n.notes.enumerated() {
+                let y = M.padY + M.nameLine + Double(i) * M.noteLine + M.noteLine / 2
+                out.append("<text x=\"\(fmt(M.padX))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" font-size=\"11.5\" font-weight=\"500\" fill=\"\(secondary)\">\(escape(note))</text>")
+            }
             out.append("</g>")
+        }
+
+        // Labels last, with a halo of the background, so curves never run through them.
+        for e in layout.edges {
+            let lines = [e.label, e.note].filter { !$0.isEmpty }
+            for (i, line) in lines.enumerated() {
+                let y = e.labelAt.y + (Double(i) - Double(lines.count - 1) / 2) * M.labelLine
+                let colour = i == 0 && !e.label.isEmpty ? palette.textPrimary : palette.textSecondary
+                let style = e.tree ? "" : " font-style=\"italic\""
+                out.append("<text x=\"\(fmt(e.labelAt.x))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11.5\" font-weight=\"500\"\(style) fill=\"\(colour)\" paint-order=\"stroke\" stroke=\"\(palette.background)\" stroke-width=\"4\" stroke-linejoin=\"round\">\(escape(line))</text>")
+            }
         }
         out.append("</svg>")
         return out.joined(separator: "\n") + "\n"
-    }
-
-    static func style(_ src: String) -> (String, String, String) {
-        switch src {
-        case "world": return (" stroke-dasharray=\"6 4\"", "#f3f3f3", "0.9")
-        case "guess": return (" stroke-dasharray=\"2 3\"", "#f8f8f8", "0.7")
-        case "advice": return ("", "#fff4e0", "1")
-        default: return ("", "#ffffff", "1")
-        }
     }
 
     public static func kindColour(_ kind: String?) -> String {
@@ -124,33 +151,6 @@ public enum Export {
         case "idea": return "#c9a227"
         default: return "#555555"
         }
-    }
-
-    static func shape(_ kind: String?, x: Double, y: Double, r: Double, extra: String) -> String {
-        switch kind {
-        case "person": return "<rect x=\"\(fmt(x - r * 1.4))\" y=\"\(fmt(y - r * 0.8))\" width=\"\(fmt(r * 2.8))\" height=\"\(fmt(r * 1.6))\" rx=\"\(fmt(r * 0.8))\" \(extra)/>"
-        case "place": return "<polygon points=\"\(polygon(x, y, r * 1.4, 6))\" \(extra)/>"
-        case "thing": return "<rect x=\"\(fmt(x - r * 1.4))\" y=\"\(fmt(y - r * 0.8))\" width=\"\(fmt(r * 2.8))\" height=\"\(fmt(r * 1.6))\" rx=\"4\" \(extra)/>"
-        case "action": return "<rect x=\"\(fmt(x - r * 1.4))\" y=\"\(fmt(y - r * 0.6))\" width=\"\(fmt(r * 2.8))\" height=\"\(fmt(r * 1.2))\" rx=\"\(fmt(r * 0.6))\" \(extra)/>"
-        case "event": return "<polygon points=\"\(polygon(x, y, r * 1.5, 4))\" \(extra)/>"
-        case "idea": return "<ellipse cx=\"\(fmt(x))\" cy=\"\(fmt(y))\" rx=\"\(fmt(r * 1.5))\" ry=\"\(fmt(r))\" \(extra)/>"
-        default: return "<circle cx=\"\(fmt(x))\" cy=\"\(fmt(y))\" r=\"\(fmt(r))\" \(extra)/>"
-        }
-    }
-
-    static func polygon(_ x: Double, _ y: Double, _ r: Double, _ n: Int) -> String {
-        (0..<n).map { i in
-            let a = Double(i) / Double(n) * 2 * .pi - .pi / 2
-            return "\(fmt(x + cos(a) * r)),\(fmt(y + sin(a) * r))"
-        }.joined(separator: " ")
-    }
-
-    static func trim(_ p: Placed, _ q: Placed, _ graph: Graph) -> (Double, Double, Double, Double) {
-        let rp = Layout.radius(degree: graph.degree(of: NodeID(name: p.name))) * 1.2
-        let rq = Layout.radius(degree: graph.degree(of: NodeID(name: q.name))) * 1.2
-        let dx = q.x - p.x, dy = q.y - p.y
-        let d = max(sqrt(dx * dx + dy * dy), 1)
-        return (p.x + dx / d * rp, p.y + dy / d * rp, q.x - dx / d * rq, q.y - dy / d * rq)
     }
 
     static func fmt(_ v: Double) -> String { String(format: "%.1f", v) }

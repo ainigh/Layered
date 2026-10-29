@@ -4,7 +4,7 @@ The whole behaviour of the app as a pure Swift package with no UI import: milest
 
 ```
 swift build      # zero warnings
-swift test       # 81 tests, about a second
+swift test       # 87 tests, about a second
 ```
 
 | Module | What it does | Spec section |
@@ -20,7 +20,7 @@ swift test       # 81 tests, about a second
 | `Model/Prompts`, `Grammar`, `ModelClient`, `OllamaClient`, `ModelRunner` | Six default prompts with per-folder overrides; the tightened GBNF with the name alternation; streaming Ollama client and a fixture client that replays recordings; the runner feeds lines to the gate as they stream, falls back when the grammar is rejected, and retries failed lines once. | SPEC “Model layer” |
 | `Model/Transcript` | Transcripts with timestamps and speakers into the evidence store; Transcriber and Diarizer protocols; the speaker map from clarification answers. | SPEC “Audio”, “Clarification” |
 | `Storage/` | `MapStorage` protocol (folder and in-memory), the append-only context document, submit modes, `Persistence` (load a folder, append what each action added, Optimize, branch). | SPEC “Storage” |
-| `Canvas/` | Deterministic force layout with heading clusters and pins; icon manifest matching; exports (canonical, Markdown, JSON, SVG); demo fixtures and recordings. | SPEC “Canvas”, “Icons”, “Export” |
+| `Canvas/` | `MapLayout`, the tree layout the canvas draws (GridClip’s map: roots, branches, columns, cross-links, pins) and `MapPalette`, its colours; the older force layout (kept for its tests); icon manifest matching; exports (canonical, Markdown, JSON, SVG drawn like the canvas); demo fixtures and recordings. | SPEC “Canvas”, “Icons”, “Export” |
 
 ## Conventions the harness fixes
 

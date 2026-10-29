@@ -87,10 +87,8 @@ struct SettingsPanel: View {
                 if case .folder(let url) = session.mode { Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
                 Text("Icons: add SVGs and a manifest.json to icons/ in the folder. \(session.icons.entries.count) keywords loaded.").font(Theme.caption)
             }
-            Section("Appearance and layout") {
+            Section("Appearance") {
                 Picker("Theme", selection: $session.settings.theme) { Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark") }.onChange(of: session.settings.theme) { _, _ in save() }
-                Slider(value: $session.settings.layout.linkDistance, in: 60...300) { Text("Link distance") }.onChange(of: session.settings.layout.linkDistance) { _, _ in relayout() }
-                Slider(value: $session.settings.layout.headingPull, in: 0...0.3) { Text("Heading clustering") }.onChange(of: session.settings.layout.headingPull) { _, _ in relayout() }
                 TextField("Global capture shortcut", text: $session.settings.globalShortcut).onSubmit(save)
                 Toggle("Optimize every n turns", isOn: Binding(get: { session.settings.optimizeEveryTurns != nil }, set: { session.settings.optimizeEveryTurns = $0 ? 50 : nil; save() }))
                 if session.settings.optimizeEveryTurns != nil {
@@ -99,12 +97,11 @@ struct SettingsPanel: View {
             }
         }
         .formStyle(.grouped)
-        .frame(maxHeight: 560)
+        .scrollContentBackground(.hidden)
         .task { await loadModels() }
     }
 
     private func save() { session.saveSettings() }
-    private func relayout() { save(); session.layout = Layout.compute(session.state.graph, options: session.settings.layout, previous: session.layout) }
 
     private func loadModels() async {
         models = (try? await session.runnerClient.models()) ?? []

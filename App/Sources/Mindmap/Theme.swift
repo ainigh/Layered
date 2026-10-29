@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Harness
 
 /// The one set of design tokens (SPEC “Looking nice by construction”). Views use only these.
@@ -65,4 +66,69 @@ enum Theme {
 
     /// How long a freshly appended line stays highlighted.
     static let highlightSeconds: TimeInterval = 4
+
+    /// The mind map (GridClip's look): colours from the harness's `MapPalette`, light and
+    /// dark, and the faces the layout measures with. Sizes in points match `MapLayout.Metrics`.
+    enum Map {
+        static let background = dynamic(\.background)
+        static let dot = dynamic(\.dot)
+        static let card = dynamic(\.card)
+        static let outline = dynamic(\.outline)
+        static let root = dynamic(\.root)
+        static let onRoot = dynamic(\.onRoot)
+        static let primary = dynamic(\.textPrimary)
+        static let secondary = dynamic(\.textSecondary)
+        static let tertiary = dynamic(\.textTertiary)
+        static let advice = dynamic(\.advice)
+        private static let inks = (0..<MapPalette.light.hues.count).map { i in dynamic { $0.hues[i].ink } }
+
+        /// A first-level branch's colour for its links and outlines; nil for roots and cross-links.
+        static func branch(_ n: Int) -> Color? { n > 0 ? inks[(n - 1) % inks.count] : nil }
+
+        static let nameSize: CGFloat = 13
+        static let noteSize: CGFloat = 11.5
+        static let name = Font.system(size: nameSize, weight: .medium)
+        static let note = Font.system(size: noteSize, weight: .medium)
+        static let label = Font.system(size: noteSize, weight: .medium)
+        static let corner: CGFloat = 8
+        /// Bounds of the zoom; a fit never zooms a small map in past `maxFit`.
+        static let minZoom: CGFloat = 0.1
+        static let maxZoom: CGFloat = 3
+        static let maxFit: CGFloat = 2
+        static let fitPad: CGFloat = 24
+        static let zoomStep: CGFloat = 1.4
+        /// Spacing of the background dots at zoom 1.
+        static let dotGap: CGFloat = 20
+        /// Hovering a node: everything not tied to it steps back to this.
+        static let dimmed: Double = 0.22
+        /// Buttons, keys and fit glide; drags and the wheel follow the hand.
+        static let glide: TimeInterval = 0.24
+
+        /// Widths as the canvas sets the text, so cards fit their names exactly.
+        @MainActor static func measure(_ text: String, _ role: MapLayout.TextRole) -> Double {
+            let key = "\(role)\u{1}\(text)"
+            if let w = widths[key] { return w }
+            let font = NSFont.systemFont(ofSize: role == .name ? nameSize : noteSize, weight: .medium)
+            let w = Double(ceil((text as NSString).size(withAttributes: [.font: font]).width))
+            if widths.count > 20_000 { widths.removeAll() }
+            widths[key] = w
+            return w
+        }
+        @MainActor private static var widths: [String: Double] = [:]
+
+        private static func dynamic(_ hex: @escaping @Sendable (MapPalette) -> String) -> Color {
+            Color(nsColor: NSColor(name: nil) { appearance in
+                let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                return NSColor(hex: hex(dark ? .dark : .light))
+            })
+        }
+    }
+}
+
+extension NSColor {
+    /// `#rrggbb`, as the harness's palette writes colours.
+    convenience init(hex: String) {
+        let v = UInt64(hex.dropFirst(), radix: 16) ?? 0
+        self.init(srgbRed: CGFloat((v >> 16) & 0xff) / 255, green: CGFloat((v >> 8) & 0xff) / 255, blue: CGFloat(v & 0xff) / 255, alpha: 1)
+    }
 }

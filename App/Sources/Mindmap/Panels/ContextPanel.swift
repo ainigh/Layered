@@ -7,66 +7,103 @@ struct ContextPanel: View {
     @State private var sentenceMode = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             TextEditor(text: $session.contextDraft)
                 .font(Theme.body)
-                .frame(minHeight: 160, maxHeight: 260)
+                .scrollContentBackground(.hidden)
+                .padding(Theme.Space.s)
+                .frame(minHeight: 180, maxHeight: .infinity)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: Theme.radiusSmall + 2))
+                .overlay(RoundedRectangle(cornerRadius: Theme.radiusSmall + 2).strokeBorder(Color.primary.opacity(0.1)))
                 .onChange(of: session.contextDraft) { _, _ in session.saveDraft() }
                 .overlay(alignment: .topLeading) {
                     if session.contextDraft.isEmpty {
-                        Text("Paste text, type, or drop an audio file on the canvas").foregroundStyle(.tertiary).padding(Theme.Space.s).allowsHitTesting(false)
+                        Text("Paste or type text here, or drop an audio file on the map.")
+                            .font(Theme.body).foregroundStyle(.tertiary)
+                            .padding(.horizontal, Theme.Space.s + 5).padding(.vertical, Theme.Space.s)
+                            .allowsHitTesting(false)
                     }
                 }
-            HStack {
-                Picker("", selection: $sentenceMode) {
+            HStack(spacing: Theme.Space.s) {
+                Picker("Submit", selection: $sentenceMode) {
                     Text("All at once").tag(false)
-                    Text("One sentence at a time").tag(true)
-                }.pickerStyle(.segmented).labelsHidden()
+                    Text("Sentence by sentence").tag(true)
+                }
+                .pickerStyle(.menu).labelsHidden().fixedSize()
+                Spacer()
+                Button("Check coverage") { session.checkCoverage() }.disabled(session.running != nil)
                 Button("Submit") { session.submit(sentenceMode: sentenceMode) }
                     .buttonStyle(.borderedProminent)
                     .disabled(session.running != nil || session.contextDraft == session.submittedDraft)
             }
+            .controlSize(.regular)
             if let walk = session.sentenceWalk {
-                HStack {
-                    ProgressView(value: walk.progress)
-                    Text("s\(walk.index + 1)/\(walk.sentences.count)").font(Theme.caption)
-                    Button(walk.paused ? "Resume" : "Pause") {
-                        session.sentenceWalk?.paused.toggle()
-                        if session.sentenceWalk?.paused == false { Task { await session.walkSentences() } }
-                    }.font(Theme.caption)
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    HStack {
+                        ProgressView(value: walk.progress)
+                        Text("\(walk.index + 1) of \(walk.sentences.count)").font(Theme.caption).foregroundStyle(.secondary).monospacedDigit()
+                        Button(walk.paused ? "Resume" : "Pause") {
+                            session.sentenceWalk?.paused.toggle()
+                            if session.sentenceWalk?.paused == false { Task { await session.walkSentences() } }
+                        }.controlSize(.small)
+                    }
+                    if let s = walk.current { Text(s.sentence).font(Theme.caption).foregroundStyle(.secondary).lineLimit(2) }
                 }
-                if let s = walk.current { Text(s.sentence).font(Theme.caption).foregroundStyle(.secondary).lineLimit(2) }
-            }
-            HStack {
-                Button("Check coverage") { session.checkCoverage() }.disabled(session.running != nil)
-                Spacer()
-                Label("Drop audio here", systemImage: "waveform").font(Theme.caption).foregroundStyle(.secondary)
             }
             if let report = session.verifyReport {
                 VerifyList(session: session, report: report)
             }
-            Divider()
-            Text("Sources").font(Theme.label)
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    ForEach(session.state.context.paragraphs.filter { $0.textID != nil }, id: \.textID) { p in
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading) {
-                                Text("text \(p.textID!) · \(p.kind.rawValue)").font(Theme.label)
-                                Text(p.body).font(Theme.caption).lineLimit(2).foregroundStyle(.secondary)
+            let sources = session.state.context.paragraphs.filter { $0.textID != nil }
+            if !sources.isEmpty {
+                SectionTitle("Sources", count: sources.count)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        ForEach(sources, id: \.textID) { p in
+                            HStack(alignment: .top, spacing: Theme.Space.s) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Text \(p.textID!) · \(p.kind.rawValue)").font(Theme.label)
+                                    Text(p.body).font(Theme.caption).lineLimit(2).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                Menu {
+                                    Button("Select its ideas on the map") {
+                                        session.selection = Set(session.state.graph.nodes.keys.filter { Coverage.supports(of: $0, in: session.state.graph).contains(p.textID!) }.map(\.name))
+                                    }
+                                    Button("Forget this text", role: .destructive) { session.dispatch(.forgetText(p.textID!)) }
+                                } label: { Image(systemName: "ellipsis") }
+                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                             }
-                            Spacer()
-                            Button("show nodes") {
-                                session.selection = Set(session.state.graph.nodes.keys.filter { Coverage.supports(of: $0, in: session.state.graph).contains(p.textID!) }.map(\.name))
-                            }.font(Theme.caption)
-                            Button("forget") { session.dispatch(.forgetText(p.textID!)) }.font(Theme.caption)
+                            .rowCard()
                         }
-                        .padding(Theme.Space.xs)
                     }
                 }
+                .frame(maxHeight: 220)
             }
-            .frame(maxHeight: 160)
         }
+    }
+}
+
+/// A small section heading inside a panel, with an optional count.
+struct SectionTitle: View {
+    let title: String
+    var count: Int?
+    init(_ title: String, count: Int? = nil) { self.title = title; self.count = count }
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            Text(title).font(Theme.label).foregroundStyle(.secondary)
+            if let count { Text("\(count)").font(Theme.caption).foregroundStyle(.tertiary).monospacedDigit() }
+        }
+        .padding(.top, Theme.Space.xs)
+    }
+}
+
+extension View {
+    /// A list row on a quiet rounded surface, the one row style panels use.
+    func rowCard() -> some View {
+        padding(Theme.Space.s)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: Theme.radiusSmall + 2))
     }
 }
 
@@ -118,13 +155,11 @@ struct ClarifyPanel: View {
                         Button("Add") { answer(i, q) }.disabled((answers[i] ?? "").isEmpty)
                     }
                 }
-                .padding(Theme.Space.s)
-                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                .rowCard()
             }
             let labels = Set(session.state.evidence.sentences.compactMap(\.speaker)).sorted()
             if !labels.isEmpty {
-                Divider()
-                Text("Speakers").font(Theme.label)
+                SectionTitle("Speakers")
                 ForEach(labels, id: \.self) { label in
                     HStack {
                         Text(label).frame(width: 80, alignment: .leading)
@@ -136,8 +171,7 @@ struct ClarifyPanel: View {
                     }
                 }
             }
-            Divider()
-            Text("Add context by hand").font(Theme.label)
+            SectionTitle("Add context by hand")
             AddContextField(session: session)
         }
     }
@@ -203,14 +237,12 @@ struct ProofPanel: View {
                                     .onTapGesture { session.selection = Set(Proof.nodes(supportedBy: entry.sentence.id, in: session.state.graph)) }
                                 HStack { ForEach(entry.nodes, id: \.self) { NodeChip(name: $0, graph: session.state.graph) } }
                             }
-                            .padding(Theme.Space.s)
-                            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                            .rowCard()
                         }
                     }
                 }
                 if names.count == 1, let node = session.state.graph.node(names[0]) {
-                    Divider()
-                    Text("Notes").font(Theme.label)
+                    SectionTitle("Notes")
                     ForEach(node.notes, id: \.self) { Text($0).font(Theme.caption) }
                     ForEach(Outline.comments(attachedTo: names[0], in: session.state.graph), id: \.self) { Text($0).font(Theme.caption).italic() }
                 }

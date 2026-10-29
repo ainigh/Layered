@@ -15,7 +15,8 @@ final class MapSession {
     var settings: Settings
     var prompts: PromptSet
     var ui: UIState
-    var layout: Layout
+    /// The live map laid out (`displayedLayout` is what the canvas shows).
+    private(set) var layout = MapLayout()
     var icons = IconManifest()
 
     // Transient UI state (not persisted).
@@ -59,6 +60,19 @@ final class MapSession {
         return state.graph
     }
 
+    /// The layout the canvas draws: the live map's, or the turn History is showing.
+    var displayedLayout: MapLayout {
+        viewingTurn == nil ? layout : lay(displayedGraph)
+    }
+
+    /// Lays a graph out as GridClip draws maps, measuring text as the canvas sets it.
+    func lay(_ graph: Graph) -> MapLayout {
+        let icons = self.icons
+        return MapLayout.compute(graph, measure: { Theme.Map.measure($0, $1) }, glyph: { MapLayout.defaultGlyph($0) || !icons.icons(for: $0.id.name).isEmpty })
+    }
+
+    func relayout() { layout = lay(state.graph) }
+
     // MARK: - Opening
 
     static func demo(_ map: Demo.Map) -> MapSession {
@@ -75,7 +89,7 @@ final class MapSession {
         let session = MapSession(mode: .folder(folder), state: loaded.state, storage: storage, settings: settings, prompts: loaded.prompts, ui: loaded.ui,
                                  client: client, transcriber: WhisperTranscriber(), diarizer: WhisperDiarizer())
         session.bookmark = try? folder.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
-        if let data = try? storage.readIconManifest(), let manifest = try? IconManifest(json: data) { session.icons = manifest }
+        if let data = try? storage.readIconManifest(), let manifest = try? IconManifest(json: data) { session.icons = manifest; session.relayout() }
         RecentMaps.add(folder)
         return session
     }
@@ -91,8 +105,8 @@ final class MapSession {
         self.runnerClient = client
         self.transcriber = transcriber
         self.diarizer = diarizer
-        self.layout = Layout.compute(state.graph, options: settings.layout)
         if settings.model.model == nil, case .demo = mode { self.settings.model.model = "demo" }
+        relayout()
     }
 
     // MARK: - Dispatch
@@ -108,7 +122,7 @@ final class MapSession {
         next.errors.forEach { try? storage.appendErrorLog($0) }
         state = next
         pendingWrites = Persistence.sync(before: before, after: next, storage: storage)
-        layout = Layout.compute(state.graph, options: settings.layout, iterations: 120, previous: layout)
+        relayout()
         viewingTurn = nil
         if Persistence.optimizeDue(state, settings: settings) { optimize() }
     }
@@ -130,7 +144,7 @@ final class MapSession {
         if let next = try? Persistence.branch(state, atTurn: n, storage: storage, now: Date()) {
             state = next
             viewingTurn = nil
-            layout = Layout.compute(state.graph, options: settings.layout, iterations: 120, previous: layout)
+            relayout()
         }
     }
 
@@ -307,7 +321,7 @@ final class MapSession {
         switch format {
         case .mm: return (Data(Export.canonical(state.graph).utf8), "mm")
         case .markdown: return (Data(Export.markdown(state.graph).utf8), "md")
-        case .json: return ((try? Export.json(state.graph, layout: layout)) ?? Data(), "json")
+        case .json: return ((try? Export.json(state.graph, layout: layout.centers)) ?? Data(), "json")
         case .svg: return (Data(Export.svg(state.graph, layout: layout).utf8), "svg")
         }
     }

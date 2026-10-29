@@ -44,7 +44,7 @@ cd App && make app        # builds Mindmap.app into App/build/ (scripts/build-ap
 open build/Mindmap.app
 ```
 
-Or open `App/Package.swift` in Xcode for previews and snapshot tests. The app runs with no folder and no model: the menu bar menu offers three demo maps (tiny, typical, large) backed by recorded model responses.
+Or open `App/Package.swift` in Xcode for previews and snapshot tests. On first launch the app asks for a folder to keep maps in; each folder inside it is a project with one map. It runs with no model: **Try a demo** makes a demo project (tiny, typical or large) backed by recorded model responses.
 
 ## Where things live
 

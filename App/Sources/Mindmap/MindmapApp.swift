@@ -20,8 +20,9 @@ struct MindmapApp: App {
                 Button("Redo") { model.session?.dispatch(.redo) }.keyboardShortcut("z", modifiers: [.command, .shift])
             }
             CommandMenu("Map") {
-                Button("New map from clipboard") { model.newFromClipboard() }.keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("Open folder…") { model.openFolder() }.keyboardShortcut("o", modifiers: .command)
+                Button("New project from clipboard") { model.newFromClipboard() }.keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("Projects…") { model.showProjects() }.keyboardShortcut("o", modifiers: .command)
+                Button("Choose maps folder…") { model.chooseWorkspace() }
                 Button("Transcribe audio file…") { model.pickAudio() }
                 Divider()
                 Button("Submit") { model.session?.submit() }.keyboardShortcut(.return, modifiers: .command)
@@ -48,13 +49,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// App-wide state: the open session, the demo fallback, the window.
+/// App-wide state: the maps folder and the open project's session, the window.
 @MainActor
 @Observable
 final class AppModel {
     static let shared = AppModel()
 
     var session: MapSession?
+    /// The folder the user keeps their maps in; each folder inside is a project.
+    var workspace: Workspace?
     /// The panel each side pane shows; a side with none is closed.
     var shownPanels: [PanelPlacement.Edge: Panel] = [.leading: .context]
     /// What a closed pane showed last, so opening it again brings that back.
@@ -68,7 +71,7 @@ final class AppModel {
     @ObservationIgnored private var window: NSWindow?
 
     init() {
-        session = MapSession.demo(.typical)
+        workspace = WorkspaceStore.load().flatMap { try? Workspace(root: $0) }
     }
 
     /// Starts `ollama serve` if Ollama is installed and not answering at `host`.
@@ -84,6 +87,13 @@ final class AppModel {
         updater.start()
         shortcut = GlobalShortcut { [weak self] text in
             Task { @MainActor in self?.capture(text) }
+        }
+        // The last project opens again; with no maps folder or no project yet, the window
+        // asks for them before anything else.
+        if let workspace, let last = UserDefaults.standard.string(forKey: WorkspaceStore.lastProject), let project = workspace.project(named: last) {
+            open(project)
+        } else {
+            showWindow()
         }
         // Closing the window puts the app back in the menu bar only (no Dock icon).
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
@@ -123,6 +133,11 @@ final class AppModel {
             for (edge, panel) in covered where shownPanels[edge] == nil { shownPanels[edge] = panel }
         }
         self.covered = nil
+    }
+
+    /// The panel a side shows, or would show when opened.
+    func panel(for edge: PanelPlacement.Edge) -> Panel {
+        shownPanels[edge] ?? lastShown[edge] ?? (edge == .leading ? .context : .details)
     }
 
     func hidePane(_ edge: PanelPlacement.Edge) {
@@ -173,18 +188,58 @@ final class AppModel {
         }
     }
 
-    func openFolder() {
+    /// Opens a project and remembers it for next time.
+    func open(_ project: Workspace.Project) {
+        open(project.url)
+        if session != nil { UserDefaults.standard.set(project.name, forKey: WorkspaceStore.lastProject) }
+    }
+
+    /// The window shows the projects to pick from (or make).
+    func showProjects() {
+        session = nil
+        showWindow()
+    }
+
+    /// Asks for the folder the maps live in; its folders are the projects.
+    func chooseWorkspace() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "Use folder"
-        if panel.runModal() == .OK, let url = panel.url { open(url) }
+        panel.message = "Choose a folder for your maps. Each project is a folder inside it."
+        panel.prompt = "Use for maps"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            workspace = try Workspace(root: url)
+            WorkspaceStore.save(url)
+            showProjects()
+        } catch {
+            NSAlert(error: error).runModal()
+        }
     }
 
+    /// A new, empty project, opened.
+    func createProject(_ name: String) throws {
+        guard let workspace else { return }
+        open(try workspace.create(name))
+    }
+
+    /// A demo is a project too: made in the maps folder the first time, opened after.
+    func openDemo(_ map: Demo.Map) {
+        guard let workspace else {
+            session = MapSession.demo(map)
+            showWindow()
+            return
+        }
+        do { open(try workspace.demo(map)) } catch { NSAlert(error: error).runModal() }
+    }
+
+    /// The clipboard as the first item of a new project.
     func newFromClipboard() {
-        guard let text = NSPasteboard.general.string(forType: .string) else { return }
-        openFolder()
+        guard let text = NSPasteboard.general.string(forType: .string), let workspace else { showProjects(); return }
+        let stamp = Date().formatted(.dateTime.year().month().day().hour().minute()).replacingOccurrences(of: "/", with: "-")
+        guard let project = try? workspace.create("Clipboard \(stamp)") else { showProjects(); return }
+        open(project)
         capture(text)
     }
 

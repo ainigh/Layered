@@ -49,6 +49,8 @@ final class MapSession {
     /// A word from the last model turn, shown on the map rather than over it: a reply to
     /// open, or what Check coverage found.
     var notice: Notice?
+    /// Bumped to open the selection's details on the right (selecting alone does not).
+    var detailsRequests = 0
     /// The Context panel's new-item box, kept as it is typed.
     var composerDraft = "" { didSet { UserDefaults.standard.set(composerDraft, forKey: "draft:\(title)") } }
 
@@ -66,8 +68,13 @@ final class MapSession {
     }
 
     /// A demo answers from recordings while its model is "demo"; any other model is Ollama's.
-    var usesRecordings: Bool { isDemo && (settings.model.model ?? Self.demoModel) == Self.demoModel }
-    static let demoModel = "demo"
+    var usesRecordings: Bool { (settings.model.model ?? (isDemo ? Self.demoModel : nil)) == Self.demoModel }
+    static let demoModel = Workspace.demoModel
+    /// A demo, or a project made from one: its recordings can be picked as the model.
+    var offersRecordings: Bool {
+        if case .folder(let url) = mode { return Workspace.isDemo(url) || settings.model.model == Self.demoModel }
+        return true
+    }
 
     /// Who model requests go to.
     var client: any ModelClient { usesRecordings ? recorded : ollama }
@@ -101,6 +108,9 @@ final class MapSession {
     }
 
     func relayout() { layout = lay(state.graph) }
+
+    /// The live map arranged afresh, its pins ignored (where Fill the view starts).
+    func autoArranged() -> MapLayout { lay(MapLayout.unpinned(state.graph)) }
 
     // MARK: - Opening
 
@@ -601,5 +611,32 @@ enum RecentMaps {
             return resolved
         }
         return url
+    }
+}
+
+/// Where the maps folder is kept between launches (a bookmark, as `RecentMaps` keeps maps),
+/// and which project was open last.
+enum WorkspaceStore {
+    static let path = "workspace"
+    static let bookmark = "workspaceBookmark"
+    static let lastProject = "lastProject"
+
+    static func load() -> URL? {
+        if let data = UserDefaults.standard.data(forKey: bookmark) {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) {
+                _ = url.startAccessingSecurityScopedResource()
+                return url
+            }
+        }
+        return UserDefaults.standard.string(forKey: path).map { URL(fileURLWithPath: $0) }
+    }
+
+    static func save(_ url: URL) {
+        UserDefaults.standard.set(url.path, forKey: path)
+        if let data = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+            UserDefaults.standard.set(data, forKey: bookmark)
+        }
+        UserDefaults.standard.removeObject(forKey: lastProject)
     }
 }

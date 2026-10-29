@@ -339,7 +339,7 @@ Snapshot tests replace most UI tests: a view is a function of a fixture state, s
 
 From using the app. This section supersedes the earlier text where they differ: the Text window in Core concepts, the Context, Clarify, Proof and Chat rows of the Panels table, Node rendering, and the Chat prompt’s trigger.
 
-**Context items.** The left pane holds the context and nothing else. At its top, a box to paste or type new text (**Add text**) and **Add audio…**; below, every item, scrollable, oldest first. Each text added, recording transcribed, clarification answered and reply the model wrote is an item, and once added it stays one. An item shows where it came from (You, Audio, Clarification, Model), when, whether it was edited, and whether it is on the map yet.
+**Context items.** The left pane holds the context and nothing else. An item shows its text up to 20 sentences, then “…”; the whole of it opens over the map. At its top, a box to paste or type new text (**Add text**) and **Add audio…**; below, every item, scrollable, oldest first. Each text added, recording transcribed, clarification answered and reply the model wrote is an item, and once added it stays one. An item shows where it came from (You, Audio, Clarification, Model), when, whether it was edited, and whether it is on the map yet.
 
 - **Click to select or deselect.** Selected items are the current context: every model request (Submit, Expand, Ask, Ask me, Check coverage) reads only them. Deselecting replaces deleting for “not now”: the item and its ideas stay, the model just stops reading it. New items start selected; model replies start deselected.
 - **Open over the map.** An item’s open button shows it over the map and closes both panes; they come back when it closes (click outside, the close button or Esc). There it can be read in full, edited, deselected, sent to the map, asked about (**Ask me about this** runs Clarify on that item alone), or deleted.
@@ -352,7 +352,7 @@ From using the app. This section supersedes the earlier text where they differ: 
 
 **Review on the map.** Whatever a model turn adds (Submit, Expand, an ask, Check coverage) goes on the map as soon as it answers, repeats included, and is marked for review: a new node wears a dashed ring with ✓ and ✕ above its top right corner, and a new link between nodes already there is tinted with the pair under its label (a new node’s links go with it). ✓ keeps it; ✕ deletes it (an ordinary user turn, so undo brings it back). A note under the action bar counts what is waiting, with **Accept all** and **Delete all** (one turn). The right-click menu has both too. What is waiting is remembered per map between launches. Nothing opens over the map when the model answers; a failed request shows under the action bar with what went wrong and **Retry**.
 
-**Details on the right.** Clicking a node opens the right pane on **Details**: the node’s icon and name, its kind and provenance, then its proof sentences as its description. Each sentence names the item it came from (click to open it over the map) and, for audio, plays the moment it was said. A node with no proof says why (world knowledge, a guess, advice, or yours). Then its notes and comments, its links (click to go to the other node), and Expand or Confirm. Several nodes show the union of their proof; an edge shows its own. The right pane keeps Outline, History, Prompt and Settings as tabs; panels no longer move between sides.
+**Details on the right.** Clicking a node selects it and stays on the map: beside it appear ⓘ, which opens the right pane on **Details**, and ✦, which expands it without opening anything. Details shows the node’s icon and name, its kind and provenance, then its proof sentences as its description. Each sentence names the item it came from (click to open it over the map) and, for audio, plays the moment it was said. A node with no proof says why (world knowledge, a guess, advice, or yours). Then its notes and comments, its links (click to go to the other node), and Expand or Confirm. Several nodes show the union of their proof; an edge shows its own. The right pane keeps Outline, History, Prompt and Settings as tabs; panels no longer move between sides.
 
 **Node and edge rendering**
 
@@ -424,3 +424,16 @@ Ana reviews the paper.
 | Editing text vs append-only | Each pause appends the difference as a turn; nothing in the log is rewritten |
 | Model lines arriving while you edit | Your edit is applied as a difference from where you started, so they are kept |
 | Held-back drawer replaced | Kept as a tab of the same drawer, with its count on the pill |
+
+## Projects, floating panels and the toolbar (2026-10-29)
+
+**Projects.** The maps live in one folder the user picks (asked when the app first opens, before anything else; **Choose maps folder…** changes it). Each folder inside it is a project with one map (`map.mm`, `context.md`, `texts/`, …). The window opens on the last project; with none, it lists the projects (the most recently changed first) with a box to name a new one, and opens the one picked. The project’s name is the window title, and the toolbar’s project menu switches to another or goes back to the list (⌘O). A demo is a project like any other: **Try a demo** makes `Demo – Typical` (or Tiny, Large) in the maps folder from the demo map the first time and opens it after, its model starting as the recorded answers. **New project from clipboard** makes a project with the clipboard as its first item.
+
+**The model in the toolbar.** The toolbar’s model menu lists what Ollama has installed (with size, and whether it fits in memory) and, for a demo project, the recorded answers; picking one applies to the next request. **Model settings…** opens Settings for the rest.
+
+**Floating panels.** The map fills the window and never moves when a panel opens. The Context list opens from a pill in the map’s top left corner (it counts the items not on the map yet), and Details and the other panels from a pill in its top right, the way Notation opens from the bottom left; each floats over the map below its pill and its inner edge drags to resize.
+
+**Fill the view** first arranges the map afresh (pins ignored), shows that for a moment, then spreads it.
+
+**Optimize in the notation drawer.** The drawer’s top right has **Optimize**: it applies an edit still waiting, rewrites the log as the canonical form (the old log is archived), tidies the text to match, and says how many lines it saved.
+

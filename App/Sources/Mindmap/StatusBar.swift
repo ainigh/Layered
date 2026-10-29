@@ -39,17 +39,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
         add("Open Mindmap", to: menu) { $0.showWindow() }
         menu.addItem(.separator())
-        add("New map from clipboard", to: menu) { $0.newFromClipboard() }
-        add("Open folder…", to: menu) { $0.openFolder() }
+        add("New project from clipboard", to: menu) { $0.newFromClipboard() }
         add("Transcribe audio file…", to: menu) { $0.pickAudio() }
-        let recent = RecentMaps.all()
-        if !recent.isEmpty {
-            let sub = submenu("Recent maps", in: menu)
-            for url in recent { add(url.lastPathComponent, to: sub) { $0.open(url) } }
+        if let workspace = model.workspace {
+            let sub = submenu("Projects", in: menu)
+            for project in workspace.projects().prefix(12) { add(project.name, to: sub) { $0.open(project) } }
+            if sub.items.count > 0 { sub.addItem(.separator()) }
+            add("All projects…", to: sub) { $0.showProjects() }
         }
+        add("Choose maps folder…", to: menu) { $0.chooseWorkspace() }
         let demos = submenu("Demo", in: menu)
         for map in Demo.Map.allCases {
-            add(map.rawValue.capitalized, to: demos) { $0.session = MapSession.demo(map); $0.showWindow() }
+            add(map.rawValue.capitalized, to: demos) { $0.openDemo(map) }
         }
         menu.addItem(.separator())
         addUpdateItems(to: menu)

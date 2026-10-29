@@ -38,7 +38,7 @@ struct NodeDetails: View {
         let name = node.id.name
         let kind = node.note(kind: "kind")
         let src = node.note(kind: "src")
-        let symbol = session.icons.icons(for: name).first { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil } ?? IconManifest.fallbackSymbol(kind: kind)
+        let symbol = session.symbol(for: node)
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(alignment: .center, spacing: Theme.Space.s) {
                 Image(systemName: symbol).font(.system(size: Theme.Map.iconSize)).foregroundStyle(Theme.kind(kind)).frame(width: 36)

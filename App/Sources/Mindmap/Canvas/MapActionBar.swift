@@ -54,6 +54,7 @@ struct MapActionBar: View {
                 ReviewNote(session: session)
             }
         }
+        .shieldsMapScroll()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, Theme.Space.m)
         .padding(.horizontal, Theme.Space.m)

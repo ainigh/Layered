@@ -36,6 +36,7 @@ struct CaptureBar: View {
         }
         .padding(4)
         .floatingBar(in: Capsule())
+        .shieldsMapScroll()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, Theme.Space.m)
         .padding(.horizontal, Theme.Space.m)

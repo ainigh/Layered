@@ -54,6 +54,30 @@ final class CanvasTests: XCTestCase {
         XCTAssertEqual(IconManifest.fallbackSymbol(kind: nil), "circle")
     }
 
+    func testIconLibrary() throws {
+        let library = IconLibrary.builtIn
+        XCTAssertGreaterThan(library.count, 500)
+        XCTAssertEqual(library.symbols(for: "Dogs").first, "dog")
+        XCTAssertEqual(library.symbols(for: "meetings").first, "calendar")
+        XCTAssertEqual(library.symbols(for: "family"), ["figure.2.and.child.holdhands", "person.3"])
+        XCTAssertEqual(library.symbols(for: "the"), [])
+        var manifest = try IconManifest(json: Data(#"{"house": ["house", "home"]}"#.utf8))
+        manifest.library = library
+        // The project's own icon wins; the library covers the rest; a symbol this Mac lacks gives way to the next.
+        XCTAssertEqual(manifest.icons(for: "home office"), ["house", "building.2"])
+        XCTAssertEqual(manifest.icons(for: "family", available: { $0 != "figure.2.and.child.holdhands" }), ["person.3"])
+        XCTAssertEqual(manifest.icons(for: "the zebra"), [])
+        // Words added later go behind; short, common or non-letter words are skipped.
+        var extra = IconLibrary()
+        extra.add("zebra", ["hare"], minLength: 3)
+        extra.add("zebra", ["pawprint", "hare"], minLength: 3)
+        extra.add("ox", ["hare"], minLength: 3)
+        extra.add("of", ["hare"])
+        extra.add("x2", ["hare"])
+        XCTAssertEqual(extra.count, 1)
+        XCTAssertEqual(extra.symbols(for: "zebras"), ["hare", "pawprint"])
+    }
+
     func testExports() throws {
         let state = Demo.state(.typical)
         let graph = state.graph

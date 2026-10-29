@@ -17,7 +17,7 @@ final class MapSession {
     var ui: UIState
     /// The live map laid out (`displayedLayout` is what the canvas shows).
     private(set) var layout = MapLayout()
-    var icons = IconManifest()
+    var icons = MapSession.manifest()
 
     // Transient UI state (not persisted).
     var selection: Set<String> = []
@@ -139,7 +139,35 @@ final class MapSession {
     /// Lays a graph out as GridClip draws maps, measuring text as the canvas sets it.
     func lay(_ graph: Graph) -> MapLayout {
         let icons = self.icons
-        return MapLayout.compute(graph, measure: { Theme.Map.measure($0, $1) }, glyph: { MapLayout.defaultGlyph($0) || !icons.icons(for: $0.id.name).isEmpty })
+        return MapLayout.compute(graph, measure: { Theme.Map.measure($0, $1) }, glyph: { MapLayout.defaultGlyph($0) || !icons.icons(for: $0.id.name, available: SymbolLibrary.exists).isEmpty })
+    }
+
+    /// The project's icon manifest (none: an empty one), backed by every symbol a name can match.
+    nonisolated static func manifest(_ json: Data? = nil) -> IconManifest {
+        var manifest = json.flatMap { try? IconManifest(json: $0) } ?? IconManifest()
+        manifest.library = SymbolLibrary.all
+        return manifest
+    }
+
+    /// Symbols that could draw a name, for the node's Icon menu: each word's matches, best first.
+    func iconChoices(for name: String) -> [String] {
+        var out: [String] = []
+        for token in name.lowercased().split(whereSeparator: { !$0.isLetter }) {
+            for symbol in icons.library.symbols(for: String(token)) where !out.contains(symbol) && SymbolLibrary.exists(symbol) {
+                out.append(symbol)
+            }
+        }
+        return Array(out.prefix(16))
+    }
+
+    /// A node's icon: the one its `@icon` names (a symbol, or a word to match), else a match for
+    /// its name (the project's icons, the built-in words, the Mac's symbols), else its kind's glyph.
+    func symbol(for node: Node) -> String {
+        if let icon = node.note(kind: "icon") {
+            if SymbolLibrary.exists(icon) { return icon }
+            if let match = icons.icons(for: icon, available: SymbolLibrary.exists).first { return match }
+        }
+        return icons.icons(for: node.id.name, available: SymbolLibrary.exists).first ?? IconManifest.fallbackSymbol(kind: node.note(kind: "kind"))
     }
 
     func relayout() { layout = lay(state.graph) }
@@ -163,7 +191,7 @@ final class MapSession {
         let session = MapSession(mode: .folder(folder), state: loaded.state, storage: storage, settings: settings, prompts: loaded.prompts, ui: loaded.ui,
                                  recorded: Demo.client(), transcriber: WhisperTranscriber(), diarizer: WhisperDiarizer())
         session.bookmark = try? folder.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
-        if let data = try? storage.readIconManifest(), let manifest = try? IconManifest(json: data) { session.icons = manifest; session.relayout() }
+        if let data = try? storage.readIconManifest() { session.icons = manifest(data); session.relayout() }
         RecentMaps.add(folder)
         return session
     }

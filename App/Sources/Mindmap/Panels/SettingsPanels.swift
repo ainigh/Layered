@@ -100,7 +100,7 @@ struct SettingsPanel: View {
             Section("Folder") {
                 Text(session.title)
                 if case .folder(let url) = session.mode { Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
-                Text("Icons: add SVGs and a manifest.json to icons/ in the folder. \(session.icons.entries.count) keywords loaded.").font(Theme.caption)
+                Text("Icons: a node's name is matched against \(session.icons.library.count) words for SF Symbols (built in, and the symbols' own names and search tags on this Mac). A manifest.json in icons/ adds your own words: \(session.icons.entries.count) loaded.").font(Theme.caption)
             }
             Section("Appearance") {
                 ThemePicker()

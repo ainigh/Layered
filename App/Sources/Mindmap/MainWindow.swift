@@ -70,6 +70,11 @@ struct ProjectChooser: View {
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Map.background)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                UpdateStatus(updater: model.updater)
+            }
+        }
     }
 
     @ViewBuilder
@@ -269,11 +274,13 @@ struct ProjectMenu: View {
 struct MapWindow: View {
     @Bindable var session: MapSession
     @Bindable var model: AppModel
+    /// Where panels and bars float over the map: the wheel there scrolls them, not the map.
+    @State private var shields: [CGRect] = []
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                CanvasView(session: session)
+                CanvasView(session: session, shields: shields)
                     .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
                         handleDrop(providers)
                     }
@@ -284,9 +291,12 @@ struct MapWindow: View {
                 CaptureBar(session: session)
                 if let overlay = session.overlay {
                     MapOverlay(session: session, overlay: overlay)
+                        .shieldsMapScroll()
                         .transition(.opacity)
                 }
             }
+            .coordinateSpace(name: MapScroll.space)
+            .onPreferenceChange(MapScroll.Shields.self) { shields = $0 }
             .frame(minWidth: 480)
             StatusBar(session: session, model: model)
         }
@@ -311,6 +321,10 @@ struct MapWindow: View {
                 Button { session.selection.forEach { session.expand($0) } } label: { Label("Expand", systemImage: "sparkles") }
                     .help("Expand the selected nodes (⌘E)")
                     .disabled(session.selection.isEmpty || session.running != nil)
+            }
+            // Updates at the top right, last of all.
+            ToolbarItem(placement: .primaryAction) {
+                UpdateStatus(updater: model.updater)
             }
         }
         .onChange(of: session.detailsRequests) { _, _ in
@@ -434,6 +448,7 @@ struct SidePane<Content: View>: View {
         .background(.background.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
         .clipShape(RoundedRectangle(cornerRadius: Theme.radiusLarge))
         .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
+        .shieldsMapScroll()
     }
 
     private func resizeHandle(_ placement: PanelPlacement) -> some View {
@@ -596,7 +611,6 @@ struct StatusBar: View {
             Label("Local only", systemImage: "lock.fill").foregroundStyle(.green).help("Nothing leaves this Mac")
             BackgroundWork(model: model)
             AppearanceToggle()
-            UpdateStatus(updater: model.updater)
         }
         .labelStyle(StatusLabelStyle())
         .font(Theme.caption)
@@ -702,12 +716,13 @@ struct AppearanceToggle: View {
     }
 }
 
+/// Checking for, installing or retrying an update, at the top right of the window.
 struct UpdateStatus: View {
     let updater: Updater
 
     var body: some View {
-        if Updater.canUpdate {
-            HStack(spacing: Theme.Space.xs) {
+        Group {
+            if Updater.canUpdate {
                 switch updater.state {
                 case .idle, .upToDate:
                     Button { updater.check(userInitiated: true) } label: {
@@ -715,29 +730,39 @@ struct UpdateStatus: View {
                     }
                     .help(updater.state == .upToDate ? "\(updater.versionLine). Click to check again" : updater.versionLine)
                 case .checking:
-                    ProgressView().controlSize(.mini)
-                    Text("Checking for updates…")
+                    HStack(spacing: Theme.Space.xs) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking for updates…")
+                    }
                 case let .available(plan):
                     Button { updater.confirmInstall() } label: { Label(plan.title + "…", systemImage: "arrow.down.circle.fill") }
                         .foregroundStyle(Theme.accent)
                         .help("Review the update; nothing installs until you say so")
                 case let .installing(step):
-                    ProgressView().controlSize(.mini)
-                    Text(step).lineLimit(1)
-                case let .failed(message):
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(message).lineLimit(1).truncationMode(.tail).frame(maxWidth: 220).help(message)
-                    Button("Try again") { updater.check(userInitiated: true) }
-                    Button("Copy error report") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(Updater.report(message), forType: .string)
+                    HStack(spacing: Theme.Space.xs) {
+                        ProgressView().controlSize(.small)
+                        Text(step).lineLimit(1).frame(maxWidth: 220)
                     }
+                case let .failed(message):
+                    Menu {
+                        Text(message)
+                        Button("Try again") { updater.check(userInitiated: true) }
+                        Button("Copy error report") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(Updater.report(message), forType: .string)
+                        }
+                    } label: {
+                        Label("Update failed", systemImage: "exclamationmark.triangle.fill")
+                    }
+                    .foregroundStyle(.orange)
+                    .help(message)
                 }
+            } else {
+                Text(updater.versionLine).lineLimit(1).foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-        } else {
-            Text(updater.versionLine).lineLimit(1)
         }
+        .font(Theme.caption)
+        .labelStyle(.titleAndIcon)
     }
 }
 

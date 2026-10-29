@@ -11,7 +11,7 @@ let package = Package(
         .library(name: "Harness", targets: ["Harness"]),
     ],
     targets: [
-        .target(name: "Harness"),
+        .target(name: "Harness", resources: [.copy("Resources/Demo")]),
         .testTarget(
             name: "HarnessTests",
             dependencies: ["Harness"],

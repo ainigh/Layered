@@ -467,3 +467,11 @@ Ana reviews the paper.
 
 **Light and dark.** The end of the status bar has a toggle: **System**, **Light**, **Dark**. It applies to the whole app (the project list too, not only an open map), is kept between launches, and is the same choice as Settings' Theme. The theme in a project's `settings.json` is no longer read.
 
+
+## Fit tight, one panel at a time, work that carries on (2026-10-29)
+
+**Fit zooms in all the way.** Fitting the map (opening it, **Fit**, `0`, a resize or a new node before the view was touched, Fill the view) zooms in until the map's widest or tallest side meets the view's edges, 8 points in: any further zoom pushes a node out of view. A small map is no longer held at 2×; only the zoom's own limit (3×) stops it.
+
+**One floating panel at a time.** Opening Context, a right-hand panel or the Notation drawer closes whichever other one was open. Something opened over the map still closes it and brings it back when it closes.
+
+**Work carries on.** What a project is doing (the model, a sentence walk, a recording, a transcription) carries on when the window is closed (the app stays in the menu bar) and when another project, or the project list, is opened. A project left while working stays open in the background until it is done, then a notification says it finished (or what stopped it); opening it again picks up the same session, so two never write one folder. The project list shows **Working now**: each working project, what it is doing with its progress or time, **Stop** where it can stop (the model, a sentence walk, a recording) and **Open**; its tile shows a spinner. With a map open, the status bar says when other projects are working and lists them on a click. Quitting while anything works asks first (**Keep Working** or **Quit Anyway**), since quitting stops it; an update's restart does not ask.

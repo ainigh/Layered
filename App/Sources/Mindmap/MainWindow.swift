@@ -90,12 +90,13 @@ struct ProjectChooser: View {
                 .disabled(Workspace.folderName(name).isEmpty)
         }
         if let problem { Text(problem).font(Theme.caption).foregroundStyle(.orange) }
+        if !model.working.isEmpty { WorkingList(model: model) }
         if all.isEmpty {
             Text("No projects yet. Name one above, or try a demo.").font(Theme.body).foregroundStyle(.secondary)
         } else {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: Theme.Space.s)], spacing: Theme.Space.s) {
-                    ForEach(all) { project in ProjectTile(project: project) { model.open(project) } }
+                    ForEach(all) { project in ProjectTile(project: project, working: model.session(workingOn: project) != nil) { model.open(project) } }
                 }
                 .padding(2)
             }
@@ -120,18 +121,104 @@ struct ProjectChooser: View {
     }
 }
 
-/// One project in the chooser's grid: click to open it.
+/// Every project working now (the model, a transcription, a recording, a sentence walk),
+/// each going on whether or not it is open: what it is doing, Open, and Stop where it can.
+struct WorkingList: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text("Working now").font(Theme.label).foregroundStyle(.secondary)
+            ForEach(model.working) { session in
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    Text(session.title).font(Theme.label).lineLimit(1).frame(minWidth: 120, maxWidth: 200, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(session.work) { work in WorkLine(session: session, work: work) }
+                    }
+                    Spacer(minLength: 0)
+                    if session !== model.session {
+                        Button("Open") { model.show(session) }.controlSize(.small)
+                    }
+                }
+                .rowCard()
+            }
+        }
+    }
+}
+
+/// One thing a project is doing: what, how far or how long, and Stop where it can be stopped.
+struct WorkLine: View {
+    let session: MapSession
+    let work: Work
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            Image(systemName: work.symbol).foregroundStyle(Theme.accent).frame(width: 16)
+            Text(work.text).lineLimit(1).truncationMode(.middle)
+            if let f = work.fraction {
+                ProgressView(value: f).frame(width: 60).controlSize(.mini)
+            } else if let since = work.since {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let seconds = max(0, Int(context.date.timeIntervalSince(since)))
+                    Text("\(seconds / 60):\(String(format: "%02d", seconds % 60))").monospacedDigit().foregroundStyle(.secondary)
+                }
+            } else {
+                ProgressView().controlSize(.mini)
+            }
+            switch work.id {
+            case "model", "walk":
+                Button("Stop") { session.stop() }.controlSize(.mini).disabled(work.id == "model" && session.cancelRun == nil)
+            case "recording":
+                Button("Stop") { session.stopRecording() }.controlSize(.mini).disabled(session.recording?.stopping == true && session.recording?.live != true)
+            default:
+                EmptyView()
+            }
+        }
+        .font(Theme.caption)
+    }
+}
+
+/// Other projects working in the background, at the status bar's end: click for the list.
+struct BackgroundWork: View {
+    @Bindable var model: AppModel
+    @State private var showing = false
+
+    var body: some View {
+        let others = model.working.filter { $0 !== model.session }
+        if !others.isEmpty {
+            Button { showing.toggle() } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    ProgressView().controlSize(.mini)
+                    Text(others.count == 1 ? "\(others[0].title) is working" : "\(others.count) other projects working").lineLimit(1)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Projects working in the background")
+            .popover(isPresented: $showing, arrowEdge: .top) {
+                WorkingList(model: model).padding(Theme.Space.m).frame(minWidth: 420)
+            }
+        }
+    }
+}
+
+/// One project in the chooser's grid: click to open it. One working in the background shows a spinner.
 struct ProjectTile: View {
     let project: Workspace.Project
+    var working = false
     let open: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: open) {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
-                Image(systemName: project.isDemo ? "play.rectangle" : "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(Theme.accent)
+                HStack {
+                    Image(systemName: project.isDemo ? "play.rectangle" : "point.3.connected.trianglepath.dotted")
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(Theme.accent)
+                    Spacer(minLength: 0)
+                    if working { ProgressView().controlSize(.small).help("Working") }
+                }
                 Spacer(minLength: 0)
                 Text(project.name).font(Theme.label).lineLimit(2).multilineTextAlignment(.leading)
                 Group {
@@ -190,7 +277,7 @@ struct MapWindow: View {
                     .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
                         handleDrop(providers)
                     }
-                NotationDrawer(session: session)
+                NotationDrawer(session: session, model: model)
                 side(.leading)
                 side(.trailing)
                 MapActionBar(session: session)
@@ -507,6 +594,7 @@ struct StatusBar: View {
             Label("\(c.unsupportedNodes.count)", systemImage: "circle.dashed").help("Ideas no sentence supports")
             Label("\(c.uncoveredSentences.count)", systemImage: "text.badge.xmark").help("Sentences with no idea on the map")
             Label("Local only", systemImage: "lock.fill").foregroundStyle(.green).help("Nothing leaves this Mac")
+            BackgroundWork(model: model)
             AppearanceToggle()
             UpdateStatus(updater: model.updater)
         }

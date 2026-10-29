@@ -194,12 +194,13 @@ struct CanvasView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + Theme.Map.glide) { if glide == g { glide = nil } }
     }
 
-    /// The whole map in view, centred, never zoomed in past `maxFit`.
+    /// The whole map in view, centred, zoomed in until its widest or tallest side meets the
+    /// view's edges (less `fitPad`): any further zoom would push a node out of view.
     private func fit(layout: MapLayout, animate: Bool) {
         guard size.width > 0, !layout.nodes.isEmpty else { return }
         let pad = Theme.Map.fitPad
         let w = CGFloat(layout.width), h = CGFloat(layout.height)
-        let k = max(Theme.Map.minZoom, min(Theme.Map.maxFit, (size.width - 2 * pad) / max(1, w), (size.height - 2 * pad) / max(1, h)))
+        let k = max(Theme.Map.minZoom, min(Theme.Map.maxZoom, (size.width - 2 * pad) / max(1, w), (size.height - 2 * pad) / max(1, h)))
         let x: CGFloat = (size.width - w * k) / 2 - CGFloat(layout.minX) * k
         let y: CGFloat = max(pad, (size.height - h * k) / 2) - CGFloat(layout.minY) * k
         go(Viewport(x: x, y: y, k: k), animate: animate)
@@ -223,7 +224,7 @@ struct CanvasView: View {
         let start = session.autoArranged()
         let pad = Theme.Map.fitPad
         let first = Spread(layout: start, viewWidth: Double(size.width - 2 * pad), viewHeight: Double(size.height - 2 * pad),
-                           gap: spacing, maxZoom: Double(Theme.Map.maxFit))
+                           gap: spacing, maxZoom: Double(Theme.Map.maxZoom))
         touched = false
         spreadFrom = live
         spreadTask = Task { @MainActor in

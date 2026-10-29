@@ -124,11 +124,11 @@ enum Theme {
         static let label = Font.system(size: labelSize, weight: .regular)
         static let icon = Font.system(size: iconSize, weight: .regular)
         static let corner: CGFloat = 8
-        /// Bounds of the zoom; a fit never zooms a small map in past `maxFit`.
+        /// Bounds of the zoom. A fit zooms in as far as the map allows: the nodes at its
+        /// edges sit `fitPad` from the view's, so any further zoom pushes one out of view.
         static let minZoom: CGFloat = 0.1
         static let maxZoom: CGFloat = 3
-        static let maxFit: CGFloat = 2
-        static let fitPad: CGFloat = 24
+        static let fitPad: CGFloat = 8
         static let zoomStep: CGFloat = 1.4
         /// Spacing of the background dots at zoom 1.
         static let dotGap: CGFloat = 20

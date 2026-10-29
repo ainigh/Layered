@@ -588,10 +588,10 @@ struct RecordingStatus: View {
                 Text("“\(last)”").italic().lineLimit(1).truncationMode(.head).frame(maxWidth: 220, alignment: .leading)
                     .help(recording.heard.suffix(4).joined(separator: " "))
             }
-            Button(recording.stopping ? "Finishing" : "Stop") { session.stopRecording() }
+            Button(recording.stopping ? "Stop now" : "Stop") { session.stopRecording() }
                 .controlSize(.small)
-                .disabled(recording.stopping)
-                .help(recording.live ? "Stop recording; what was said last still goes on the map" : "Stop recording and transcribe it")
+                .disabled(recording.cancelled || (recording.stopping && !recording.live))
+                .help(recording.stopping ? "Stop now: what is not on the map yet stays in the recording, unmapped" : recording.live ? "Stop recording; what was said last still goes on the map" : "Stop recording and transcribe it")
         }
     }
 }

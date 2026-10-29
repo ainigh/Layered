@@ -44,6 +44,7 @@ final class NotationGoldenTests: XCTestCase {
             let again = try Compiler.compile(once)
             XCTAssertEqual(Canonical.render(again), once, name)
             XCTAssertEqual(again.nodes, graph.nodes, name)
+            XCTAssertEqual(again.comments.map { ($0.text, $0.heading, $0.attachedTo) }.map { "\($0)" }, graph.comments.map { ($0.text, $0.heading, $0.attachedTo) }.map { "\($0)" }, name)
             XCTAssertEqual(Set(again.edges.keys), Set(graph.edges.keys), name)
             for (key, edge) in graph.edges {
                 let other = try XCTUnwrap(again.edges[key])

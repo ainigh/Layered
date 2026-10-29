@@ -12,6 +12,24 @@ public struct Turn: Equatable, Sendable {
         "@turn \(number) \(Turn.format(date)) \(who) \(what)"
     }
 
+    /// `undo 12` / `redo 12` turns reverse or restore another turn.
+    public var undoes: Int? { Turn.reference("undo", in: what) }
+    public var redoes: Int? { Turn.reference("redo", in: what) }
+
+    static func reference(_ verb: String, in what: String) -> Int? {
+        let parts = what.split(separator: " ")
+        guard parts.count == 2, parts[0] == verb else { return nil }
+        return Int(parts[1])
+    }
+
+    /// Parses a header comment back into a turn.
+    public static func parse(header: String) -> Turn? {
+        let fields = header.split(separator: " ", maxSplits: 4).map(String.init)
+        guard fields.count >= 2, fields[0] == "@turn", let n = Int(fields[1]) else { return nil }
+        let date = fields.count > 2 ? ISO8601DateFormatter().date(from: fields[2]) ?? Date(timeIntervalSince1970: 0) : Date(timeIntervalSince1970: 0)
+        return Turn(number: n, date: date, who: fields.count > 3 ? fields[3] : "", what: fields.count > 4 ? fields[4] : "", lines: [])
+    }
+
     static func format(_ date: Date) -> String {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
@@ -40,6 +58,13 @@ public struct MapState: Equatable, Sendable {
     public var errors: [String] = []
     /// The last model run: raw output, token use, whether the grammar was used.
     public var lastRun: ModelRun?
+    /// Canonical form after each turn; `snapshots[0]` is the empty map.
+    public private(set) var snapshots: [Int: String] = [0: ""]
+    /// Turn numbers that can be undone (latest last) and redone.
+    public private(set) var undoable: [Int] = []
+    public private(set) var redoable: [Int] = []
+    /// Turn numbers already in the log before an Optimize in this session, so numbering continues.
+    private var turnBase = 0
 
     public init() {}
 
@@ -47,18 +72,66 @@ public struct MapState: Equatable, Sendable {
     public init(log: String, evidence: EvidenceStore = EvidenceStore()) throws {
         self.evidence = evidence
         let parser = Parser(options: .base)
+        var graphBefore = graph
         for parsed in try parser.parse(log) {
             try graph.apply(parsed)
             self.log.append(parsed.raw)
-            if case .comment(let text) = parsed.line, text.hasPrefix("@turn ") {
-                let fields = text.split(separator: " ")
-                if fields.count >= 2, let n = Int(fields[1]) {
-                    turns.append(Turn(number: n, date: Date(timeIntervalSince1970: 0), who: fields.count > 3 ? String(fields[3]) : "", what: fields.dropFirst(4).joined(separator: " "), lines: []))
-                }
+            if case .comment(let text) = parsed.line, let turn = Turn.parse(header: text) {
+                if let last = turns.last { snapshots[last.number] = Canonical.render(graphBefore) }
+                turns.append(turn)
+                recordStacks(turn)
             } else if !turns.isEmpty {
                 turns[turns.count - 1].lines.append(parsed.raw)
             }
+            graphBefore = graph
         }
+        if let last = turns.last { snapshots[last.number] = Canonical.render(graph) }
+        if turns.isEmpty, !log.isEmpty { snapshots[0] = Canonical.render(graph) }
+        turnBase = turns.last?.number ?? 0
+    }
+
+    private mutating func recordStacks(_ turn: Turn) {
+        if let n = turn.undoes {
+            undoable.removeAll { $0 == n }
+            redoable.append(n)
+        } else if let n = turn.redoes {
+            redoable.removeAll { $0 == n }
+            undoable.append(n)
+        } else {
+            undoable.append(turn.number)
+            redoable = []
+        }
+    }
+
+    /// The map as it stood after a turn (read-only view for the History panel).
+    public func graph(atTurn n: Int) -> Graph? {
+        guard let snapshot = snapshots[n] else { return nil }
+        return try? Compiler.compile(snapshot)
+    }
+
+    /// Size of the log and of its canonical form, for the History panel.
+    public var logSize: (lines: Int, bytes: Int) { (log.count, logText.utf8.count) }
+    public var canonicalSize: (lines: Int, bytes: Int) { let c = canonical; return (c.split(separator: "\n").count, c.utf8.count) }
+
+    /// Optimize (SPEC): the canonical form becomes the log. Turns and snapshots stay in
+    /// memory so undo keeps working in this session; the caller archives the old log.
+    public func optimized() -> MapState {
+        var next = self
+        next.log = Canonical.lines(for: graph)
+        next.turnBase = turns.last?.number ?? 0
+        next.turns = []
+        return next
+    }
+
+    /// Branch from a turn: the state as it was after turn `n`. Later turns go to the archive.
+    public func branched(atTurn n: Int) -> (state: MapState, archived: [String])? {
+        guard let cut = log.firstIndex(where: { Turn.parse(header: $0)?.number == n + 1 }) ?? (turns.last?.number == n ? log.count : nil) else { return nil }
+        var next = (try? MapState(log: Array(log[..<cut]).joined(separator: "\n"), evidence: evidence)) ?? MapState()
+        next.evidence = evidence
+        next.texts = texts
+        next.context = context
+        next.transcripts = transcripts
+        return (next, Array(log[cut...]))
     }
 
     /// The log as it is written to `map.mm`.
@@ -79,7 +152,7 @@ public struct MapState: Equatable, Sendable {
     mutating func appendTurn(who: String, what: String, lines: [String], now: Date) {
         guard !lines.isEmpty else { return }
         let parser = Parser(options: .base)
-        var turn = Turn(number: turns.count + 1, date: now, who: who, what: what, lines: [])
+        var turn = Turn(number: max(turnBase, turns.last?.number ?? 0) + 1, date: now, who: who, what: what, lines: [])
         var applied: [String] = []
         var scratch = graph
         for line in lines {
@@ -100,6 +173,16 @@ public struct MapState: Equatable, Sendable {
         log.append(turn.header)
         log += applied
         turns.append(turn)
+        snapshots[turn.number] = canonical
+        recordStacks(turn)
+    }
+
+    /// An undo or redo that would change nothing still moves the turn between the stacks.
+    mutating func skipUndo(_ n: Int) { undoable.removeAll { $0 == n }; redoable.append(n) }
+    mutating func skipRedo(_ n: Int) { redoable.removeAll { $0 == n }; undoable.append(n) }
+
+    func snapshotGraph(_ n: Int) -> Graph? {
+        snapshots[n].flatMap { try? Compiler.compile($0) }
     }
 }
 
@@ -127,6 +210,13 @@ public enum Action: Equatable, Sendable {
     case addEdge(from: String, label: String?, to: String)
     case pin(String, x: Double, y: Double)
     case release(String)
+    /// Reverse the latest turn by appending its inverse (never by deleting).
+    case undo
+    case redo
+    /// Confirm a Dedupe proposal: `old = new`.
+    case merge(DedupeProposal)
+    /// Forget source n: delete nodes whose only support was text n.
+    case forgetText(Int)
 }
 
 public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
@@ -215,6 +305,29 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
     case .release(let name):
         guard state.graph.node(name)?.note(kind: "pos") != nil else { break }
         state.appendTurn(who: "user", what: "release \(name)", lines: ["| \(name) @pos auto"], now: now)
+
+    case .undo:
+        guard let n = state.undoable.last, let target = state.snapshotGraph(n - 1) else { break }
+        let lines = Transition.lines(from: state.graph, to: target)
+        guard !lines.isEmpty else { state.skipUndo(n); break }
+        state.appendTurn(who: "user", what: "undo \(n)", lines: lines, now: now)
+
+    case .redo:
+        guard let n = state.redoable.last, let target = state.snapshotGraph(n) else { break }
+        let lines = Transition.lines(from: state.graph, to: target)
+        guard !lines.isEmpty else { state.skipRedo(n); break }
+        state.appendTurn(who: "user", what: "redo \(n)", lines: lines, now: now)
+
+    case .merge(let proposal):
+        guard state.graph.node(proposal.old) != nil, proposal.old != proposal.new else { break }
+        var lines = [Render.edit(Edit(old: Name(proposal.old), new: Name(proposal.new)))]
+        if !proposal.reason.isEmpty { lines.append(proposal.reason) }
+        state.appendTurn(who: "user", what: "merge \(proposal.old)", lines: lines, now: now)
+
+    case .forgetText(let n):
+        let doomed = state.graph.nodes.keys.filter { $0.scope.isEmpty && Coverage.supports(of: $0, in: state.graph) == [n] }.sorted()
+        guard !doomed.isEmpty else { break }
+        state.appendTurn(who: "user", what: "forget text \(n)", lines: doomed.map { "| \($0.name) =" }, now: now)
     }
     return state
 }

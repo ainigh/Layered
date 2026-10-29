@@ -60,3 +60,32 @@ public enum Persistence {
         return pending
     }
 }
+
+extension Persistence {
+    /// Optimize: archive the log, write the canonical form, keep the session's snapshots.
+    public static func optimize(_ state: MapState, storage: any MapStorage, now: Date) throws -> MapState {
+        let next = state.optimized()
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        _ = try storage.optimize(newLog: next.logText, archiveName: "map-\(f.string(from: now)).mm")
+        return next
+    }
+
+    /// Branch from a turn: later turns go to the archive and the log is cut.
+    public static func branch(_ state: MapState, atTurn n: Int, storage: any MapStorage, now: Date) throws -> MapState? {
+        guard let (next, archived) = state.branched(atTurn: n) else { return nil }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd'T'HHmmss"
+        f.timeZone = TimeZone(identifier: "UTC")
+        _ = try storage.optimize(newLog: next.logText, archiveName: "branch-\(f.string(from: now)).mm")
+        if !archived.isEmpty { try storage.appendErrorLog("branched at turn \(n): \(archived.count) lines archived") }
+        return next
+    }
+
+    /// Whether the scheduled Optimize is due (SPEC: every n turns, if turned on).
+    public static func optimizeDue(_ state: MapState, settings: Settings) -> Bool {
+        guard let every = settings.optimizeEveryTurns, every > 0 else { return false }
+        return state.turns.count >= every
+    }
+}

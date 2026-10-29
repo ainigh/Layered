@@ -21,31 +21,51 @@ public enum Canonical {
         return out
     }
 
+    /// Within a scope, lines are grouped by outline heading (SPEC “Optimize”): the
+    /// heading comment, its free comments, then the statements of the nodes declared
+    /// under it, sorted. A comment attached to a node or edge follows its statement.
     private static func lines(for graph: Graph, scope: String) -> [String] {
         var out: [String] = []
-        for comment in graph.comments where comment.scope == scope && !comment.isTurnHeader {
-            out.append(comment.text)
-        }
+        let comments = graph.comments.filter { $0.scope == scope && !$0.isTurnHeader }
 
-        // (sort key, line); the key keeps node declarations, then notes, then edges, per name.
-        var keyed: [(String, Int, String, String)] = []
-        for (id, node) in graph.nodes where id.scope == scope {
-            if node.notes.isEmpty && graph.degree(of: id) == 0 {
-                keyed.append((id.name, 0, "", "| \(id.name)"))
+        var headings: [[String]] = [[]]
+        for comment in comments where comment.isHeading { headings.appendUnique(comment.heading) }
+        for node in graph.nodes.values where node.id.scope == scope { headings.appendUnique(node.heading) }
+
+        let edgesHere = graph.edges.values.filter { emittingScope($0) == scope }
+
+        for heading in headings {
+            if !heading.isEmpty {
+                out.append(String(repeating: "#", count: heading.count) + " " + heading[heading.count - 1])
             }
-            for note in node.notes {
-                keyed.append((id.name, 1, note, "| \(id.name) @\(note)"))
+            for comment in comments where comment.heading == heading && !comment.isHeading && comment.attachedTo == nil {
+                out.append(comment.text)
             }
+
+            var keyed: [(String, Int, String, [String])] = []
+            for (id, node) in graph.nodes where id.scope == scope && node.heading == heading {
+                let attached = comments.filter { $0.attachedTo == .node(id) }.map(\.text)
+                let isolated = node.notes.isEmpty && graph.degree(of: id) == 0
+                if isolated || !attached.isEmpty {
+                    keyed.append((id.name, 0, "", ["| \(id.name)"] + attached))
+                }
+                for note in node.notes {
+                    keyed.append((id.name, 1, note, ["| \(id.name) @\(note)"]))
+                }
+            }
+            for edge in edgesHere {
+                let (from, to) = emittingOrder(edge)
+                let owner = from.scope == scope ? from : to
+                guard graph.nodes[owner]?.heading == heading else { continue }
+                let attached = comments.filter { $0.attachedTo == .edge(edge.key) }.map(\.text)
+                keyed.append((from.name, 2, to.description, [Render.edge(edge, from: from, to: to, scope: scope)] + attached))
+                if edge.isTwoWay {
+                    keyed.append((to.name, 2, from.description, [Render.bareEdge(from: to, to: from, scope: scope)]))
+                }
+            }
+            keyed.sort { ($0.0, $0.1, $0.2) < ($1.0, $1.1, $1.2) }
+            out += keyed.flatMap(\.3)
         }
-        for edge in graph.edges.values where emittingScope(edge) == scope {
-            let (from, to) = emittingOrder(edge)
-            keyed.append((from.name, 2, to.description, Render.edge(edge, from: from, to: to, scope: scope)))
-            if edge.isTwoWay {
-                keyed.append((to.name, 2, from.description, Render.bareEdge(from: to, to: from, scope: scope)))
-            }
-        }
-        keyed.sort { ($0.0, $0.1, $0.2) < ($1.0, $1.1, $1.2) }
-        out += keyed.map(\.3)
         return out
     }
 

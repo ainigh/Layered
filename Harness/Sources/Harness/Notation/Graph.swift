@@ -19,10 +19,13 @@ public struct NodeID: Hashable, Comparable, Sendable, CustomStringConvertible {
 public struct Node: Equatable, Sendable {
     public var id: NodeID
     public var notes: [String] = []
+    /// The outline heading the node was first declared under.
+    public var heading: [String] = []
 
-    public init(id: NodeID, notes: [String] = []) {
+    public init(id: NodeID, notes: [String] = [], heading: [String] = []) {
         self.id = id
         self.notes = notes
+        self.heading = heading
     }
 
     /// Returns the value of the first note of a kind: `@src text` → `"text"`.
@@ -240,7 +243,7 @@ public struct Graph: Equatable, Sendable {
 
     private mutating func applyPath(_ path: Path, number: Int) throws {
         let ids = try path.names.map { try resolve($0, number: number) }
-        for id in ids where nodes[id] == nil { nodes[id] = Node(id: id) }
+        for id in ids where nodes[id] == nil { nodes[id] = Node(id: id, heading: headingStack) }
         for (index, link) in path.links.enumerated() {
             addEdge(from: ids[index], to: ids[index + 1], directed: link.directed, labels: link.labels, notes: link.notes)
         }
@@ -270,7 +273,7 @@ public struct Graph: Equatable, Sendable {
     /// and comments in the same scope equal to `old` are renamed (§4 “Edits”).
     public mutating func rename(_ old: NodeID, to new: NodeID) {
         if old != new, let node = nodes.removeValue(forKey: old) {
-            var target = nodes[new] ?? Node(id: new)
+            var target = nodes[new] ?? Node(id: new, heading: node.heading)
             for note in node.notes { target.addNote(note, singleValued: singleValuedNoteKinds) }
             nodes[new] = target
             for var edge in edges(touching: old) {

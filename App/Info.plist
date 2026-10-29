@@ -15,6 +15,6 @@
 	<dict>
 		<key>NSAllowsLocalNetworking</key><true/>
 	</dict>
-	<key>NSMicrophoneUsageDescription</key><string>Not used; audio files are transcribed from disk.</string>
+	<key>NSMicrophoneUsageDescription</key><string>Record and Live map record what you say, transcribed on this Mac; the audio never leaves it.</string>
 </dict>
 </plist>

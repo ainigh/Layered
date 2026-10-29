@@ -38,6 +38,11 @@ final class MapSession {
     var sentenceMode = false
     /// The recording being added: its steps and progress, or what went wrong.
     var audioJob: AudioJob?
+    /// Recording from the microphone, plain or live.
+    var recording: Recording?
+    @ObservationIgnored private var recorder: LiveRecorder?
+    /// How loud the microphone is now, 0 to 1 (read on a timer, not observed).
+    var recordingLevel: Float { recorder?.level ?? 0 }
     /// Recordings this session added, by text id (a demo keeps them where they were dropped).
     private var audioFiles: [Int: URL] = [:]
     var viewingTurn: Int?
@@ -51,7 +56,9 @@ final class MapSession {
     var notice: Notice?
     /// Bumped to open the selection's details on the right (selecting alone does not).
     var detailsRequests = 0
-    /// The Context panel's new-item box, kept as it is typed.
+    /// Bumped to open the context on the left, where a new item just went.
+    var contextRequests = 0
+    /// The Add text box, kept as it is typed.
     var composerDraft = "" { didSet { UserDefaults.standard.set(composerDraft, forKey: "draft:\(title)") } }
 
     /// The recorded answers a demo map gives until the user picks a real model.
@@ -214,11 +221,21 @@ final class MapSession {
         dispatch(.submitText(text, kind: kind))
     }
 
-    /// Adds the composer's text as an item and clears the box.
-    func addComposer() {
+    /// Adds the Add text box's text as an item and clears the box; with `send`, puts it on
+    /// the map too.
+    func addComposer(send: Bool = false) {
         guard !composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         addContext(composerDraft)
         composerDraft = ""
+        contextRequests += 1
+        if send, let id = state.context.items.last?.id { submit(only: id) }
+    }
+
+    /// One item's send button: selects it if it isn't, and puts what is new in it on the map.
+    func send(item id: Int) {
+        guard let item = state.context.item(id), !item.removed, item.kind != .model else { return }
+        if !item.selected { dispatch(.selectContext(id, true)) }
+        submit(only: id)
     }
 
     var pendingItems: [ContextItem] { state.context.pendingItems }
@@ -290,6 +307,155 @@ final class MapSession {
                 audioJob?.step = .failed((error as? AudioJob.Problem)?.message ?? (error as? ModelError).map { "\($0)" } ?? error.localizedDescription)
             }
         }
+    }
+
+    // MARK: - Recording
+
+    /// Seconds of speech a live map gathers before it transcribes them and puts them on the map.
+    static let liveChunk = 10
+
+    /// Records the microphone. Plain: when it stops, the recording is transcribed and added
+    /// as a dropped file is. Live: every few seconds what was said is transcribed, added as
+    /// an item and put on the map, while the recording goes on.
+    func startRecording(live: Bool) {
+        guard recording == nil, live || audioJob?.running != true else { return }
+        recording = Recording(live: live, started: Date(), status: "Waiting for the microphone…")
+        Task {
+            guard await LiveRecorder.permission() else {
+                recording = nil
+                lastError = ("Turn it on in System Settings › Privacy & Security › Microphone.", "Mindmap can't use the microphone", nil)
+                return
+            }
+            let recorder = LiveRecorder()
+            do {
+                try recorder.start(keepSamples: live)
+            } catch {
+                recording = nil
+                lastError = ((error as? AudioJob.Problem)?.message ?? error.localizedDescription, "Recording could not start", nil)
+                return
+            }
+            self.recorder = recorder
+            recording?.started = Date()
+            recording?.status = live ? "Getting whisper ready…" : nil
+            if live { await transcribeLive(recorder) }
+        }
+    }
+
+    /// Stops the recording. A plain one is then transcribed; a live one finishes what it heard.
+    func stopRecording() {
+        guard let recorder, let rec = recording, !rec.stopping else { return }
+        recorder.stop()
+        recording?.stopping = true
+        guard !rec.live else { return }
+        recording = nil
+        self.recorder = nil
+        dropAudio(recorder.url)
+    }
+
+    /// The live loop: waits for enough speech, cuts it at a quiet moment, transcribes it,
+    /// adds it as an item and puts it on the map; again until the recording stops and
+    /// everything it heard is in. While the model works the recording goes on, so the next
+    /// piece is simply longer.
+    private func transcribeLive(_ recorder: LiveRecorder) async {
+        let rate = LiveRecorder.rate
+        var cursor = 0
+        do {
+            let model = settings.whisperModel
+            let modelURL = try await WhisperModels.ensure(model) { [weak self] f in
+                Task { @MainActor in self?.recording?.status = "Downloading the whisper model \(model)" + (f.map { " · \(Int($0 * 100))%" } ?? "…") }
+            }
+            recording?.status = "Getting whisper ready…"
+            let whisper = try await Task.detached(priority: .userInitiated) { try WhisperSession(modelURL: modelURL) }.value
+            recording?.status = "Listening…"
+            while true {
+                let stopped = recorder.stopped
+                let available = recorder.sampleCount
+                if !stopped, available - cursor < Self.liveChunk * rate {
+                    try await Task.sleep(for: .milliseconds(400))
+                    continue
+                }
+                let end = stopped ? available : recorder.quietCut(from: cursor, to: available)
+                let samples = recorder.samples(cursor..<end)
+                let offset = Double(cursor) / Double(rate)
+                cursor = end
+                recorder.discard(upTo: cursor)
+                // Silence makes whisper invent words; skip it.
+                if samples.count >= rate / 2, LiveRecorder.rms(samples) > 0.004 {
+                    recording?.status = "Transcribing…"
+                    let heard = try await Task.detached(priority: .userInitiated) { try whisper.transcribe(samples) }.value
+                    let transcript = Self.placed(heard, at: offset)
+                    if !transcript.segments.isEmpty { await addLive(transcript) }
+                }
+                if stopped, cursor >= recorder.sampleCount { break }
+                recording?.status = recorder.stopped ? "Finishing…" : "Listening…"
+            }
+        } catch {
+            recorder.stop()
+            recording?.problem = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
+        }
+        finishLive(recorder)
+    }
+
+    /// A piece of a live recording, timed from the recording's start, without what whisper
+    /// writes for no speech (`[BLANK_AUDIO]`, `(music)`).
+    nonisolated static func placed(_ piece: Transcript, at offset: Double) -> Transcript {
+        var t = piece
+        t.segments = piece.segments.compactMap { seg in
+            let text = seg.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let bracketed = (text.hasPrefix("[") && text.hasSuffix("]")) || (text.hasPrefix("(") && text.hasSuffix(")"))
+            guard !text.isEmpty, !bracketed else { return nil }
+            return Transcript.Segment(t0: seg.t0 + offset, t1: seg.t1 + offset, text: text, speaker: seg.speaker)
+        }
+        return t
+    }
+
+    /// What a live recording heard becomes an item, and goes on the map once the model is free.
+    private func addLive(_ transcript: Transcript) async {
+        let id = state.evidence.nextTextID
+        dispatch(.submitTranscript(transcript))
+        guard state.context.item(forText: id) != nil else { return }
+        recording?.texts.append(id)
+        recording?.heard.append(contentsOf: transcript.segments.map(\.text))
+        recording?.status = "Putting it on the map…"
+        while running != nil || sentenceWalk != nil { try? await Task.sleep(for: .milliseconds(300)) }
+        // Read again: the user may have deselected or deleted it meanwhile.
+        guard let item = state.context.item(forText: id), item.isPending else { return }
+        let request = Submit.request(for: item)
+        if !request.isEmpty, await run(.extract, item: request, textID: id, about: "text \(id)") != nil {
+            dispatch(.markExtracted(textID: id))
+        }
+    }
+
+    /// The live recording is over: its file is kept in the folder once, under every item it
+    /// became (each plays from its own moment), and the map says how it went.
+    private func finishLive(_ recorder: LiveRecorder) {
+        let ids = recording?.texts ?? []
+        if let first = ids.first, let stored = try? storage.storeAudio(id: first, from: recorder.url) {
+            audioFiles[first] = stored
+            let folder = stored.deletingLastPathComponent()
+            for id in ids.dropFirst() {
+                let link = folder.appendingPathComponent("\(id).\(stored.pathExtension)")
+                // A hard link in the project's audio folder: found again next launch, no extra space.
+                if folder.lastPathComponent == "audio", (try? FileManager.default.linkItem(at: stored, to: link)) != nil {
+                    audioFiles[id] = link
+                } else {
+                    audioFiles[id] = stored
+                }
+            }
+        }
+        let problem = recording?.problem
+        recording = nil
+        self.recorder = nil
+        let said: String
+        if let problem {
+            said = "The live map stopped: " + problem
+        } else if ids.isEmpty {
+            said = "The live map heard no speech."
+        } else {
+            said = ids.count == 1 ? "The live map added the recording as an item and put it on the map."
+                : "The live map added the recording as \(ids.count) items and put them on the map."
+        }
+        notice = Notice(text: said)
     }
 
     /// Opens an item over the map.
@@ -524,8 +690,25 @@ enum Overlay: Equatable {
     case item(Int)
     case clarify
     case coverage
+    /// Add text: a box to paste or type a new item into.
+    case text
     /// Add audio: a drop zone, then the recording's steps as it is transcribed.
     case audio
+}
+
+/// A recording from the microphone under way.
+struct Recording: Equatable {
+    /// Live: transcribed as it goes, each piece added and put on the map. Otherwise
+    /// transcribed when it stops, as a dropped file is.
+    let live: Bool
+    var started: Date
+    /// What it is doing now, when there is something to say.
+    var status: String?
+    /// What a live recording has heard so far, and the texts it became.
+    var heard: [String] = []
+    var texts: [Int] = []
+    var stopping = false
+    var problem: String?
 }
 
 /// A recording being added, step by step.

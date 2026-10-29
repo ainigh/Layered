@@ -2,7 +2,8 @@ import SwiftUI
 import Harness
 import UniformTypeIdentifiers
 
-/// What opens over the map: a context item, Ask me's questions, or Check coverage's report.
+/// What opens over the map: a context item, Ask me's questions, Check coverage's report, or
+/// the Add panel (text or audio).
 /// The map dims behind it; clicking there, the close button or Esc closes it.
 struct MapOverlay: View {
     @Bindable var session: MapSession
@@ -23,6 +24,8 @@ struct MapOverlay: View {
                     ClarifyOverlay(session: session)
                 case .coverage:
                     CoverageOverlay(session: session)
+                case .text:
+                    TextOverlay(session: session)
                 case .audio:
                     AudioOverlay(session: session)
                 }
@@ -349,6 +352,71 @@ struct VerifyList: View {
     }
 }
 
+/// Add text: paste or type, then add it to Context as an item (and, if you like, send it
+/// to the map straight away). The box keeps what was typed until it is added.
+struct TextOverlay: View {
+    @Bindable var session: MapSession
+
+    var body: some View {
+        let empty = session.composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        VStack(alignment: .leading, spacing: 0) {
+            OverlayHeader(symbol: "doc.text", tint: Theme.origin(.you).color, title: "Add text",
+                          subtitle: "It joins Context as an item; send it to the map from there, or now.", close: { session.overlay = nil }) { AddTabs(session: session) }
+            Divider()
+            TextEditor(text: $session.composerDraft)
+                .font(Theme.body)
+                .scrollContentBackground(.hidden)
+                .padding(Theme.Space.xs)
+                .frame(minHeight: 240)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: Theme.radiusSmall + 2))
+                .overlay(RoundedRectangle(cornerRadius: Theme.radiusSmall + 2).strokeBorder(Color.primary.opacity(0.1)))
+                .overlay(alignment: .topLeading) {
+                    if session.composerDraft.isEmpty {
+                        Text("Paste or type new context…")
+                            .font(Theme.body).foregroundStyle(.tertiary)
+                            .padding(.horizontal, Theme.Space.s + 1).padding(.vertical, Theme.Space.xs)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .padding(Theme.Space.m)
+                .frame(maxHeight: .infinity, alignment: .top)
+            Divider()
+            HStack(spacing: Theme.Space.s) {
+                Spacer()
+                Button("Add to Context") { add(send: false) }
+                    .disabled(empty)
+                    .help("Add it as an item; send it to the map from its button in Context")
+                Button { add(send: true) } label: { Label("Add and send to the map", systemImage: "paperplane.fill") }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(empty || session.running != nil || session.sentenceWalk != nil)
+                    .help("Add it as an item and put it on the map now")
+            }
+            .controlSize(.small)
+            .padding(Theme.Space.m)
+        }
+    }
+
+    private func add(send: Bool) {
+        session.addComposer(send: send)
+        session.overlay = nil
+    }
+}
+
+/// Text or Audio, in the Add panel's header: switches between the two.
+struct AddTabs: View {
+    @Bindable var session: MapSession
+
+    var body: some View {
+        Picker("", selection: Binding(get: { session.overlay == .audio }, set: { session.overlay = $0 ? .audio : .text })) {
+            Text("Text").tag(false)
+            Text("Audio").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+    }
+}
+
 /// Add audio: drop a recording (or choose one), then watch it go through each step, on
 /// this Mac, until it is an item in the context.
 struct AudioOverlay: View {
@@ -360,7 +428,7 @@ struct AudioOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             OverlayHeader(symbol: "waveform", tint: Theme.origin(.audio).color, title: "Add audio",
-                          subtitle: "Transcribed on this Mac with whisper; nothing leaves it.", close: { session.overlay = nil }) { EmptyView() }
+                          subtitle: "Transcribed on this Mac with whisper; nothing leaves it.", close: { session.overlay = nil }) { AddTabs(session: session) }
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.m) {
@@ -438,7 +506,7 @@ struct AudioOverlay: View {
                     Button("Open it") { session.open(item: item) }.controlSize(.small)
                 }
             default:
-                Text("You can close this; it carries on, and its progress shows in Context.").font(Theme.caption).foregroundStyle(.secondary)
+                Text("You can close this; it carries on, and its progress shows below the map.").font(Theme.caption).foregroundStyle(.secondary)
             }
         }
         .rowCard()

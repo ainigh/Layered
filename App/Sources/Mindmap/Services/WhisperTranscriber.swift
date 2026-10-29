@@ -85,14 +85,44 @@ enum WhisperModels {
     }
 }
 
+/// A whisper model loaded once and kept, for the many short pieces of a live recording
+/// (loading a model takes longer than transcribing ten seconds). One piece at a time.
+final class WhisperSession: @unchecked Sendable {
+    private let ctx: OpaquePointer
+    private let modelURL: URL
+    private let lock = NSLock()
+
+    init(modelURL: URL) throws {
+        ctx = try WhisperRun.load(modelURL)
+        self.modelURL = modelURL
+    }
+
+    deinit { whisper_free(ctx) }
+
+    func transcribe(_ samples: [Float]) throws -> Transcript {
+        lock.lock()
+        defer { lock.unlock() }
+        return try WhisperRun.full(ctx, modelURL: modelURL, samples: samples, tinydiarize: false, progress: { _ in })
+    }
+}
+
 enum WhisperRun {
     static func run(modelURL: URL, samples: [Float], tinydiarize: Bool, progress: @escaping (Double) -> Void) throws -> Transcript {
+        let ctx = try load(modelURL)
+        defer { whisper_free(ctx) }
+        return try full(ctx, modelURL: modelURL, samples: samples, tinydiarize: tinydiarize, progress: progress)
+    }
+
+    static func load(_ modelURL: URL) throws -> OpaquePointer {
         var cparams = whisper_context_default_params()
         cparams.use_gpu = true
         guard let ctx = whisper_init_from_file_with_params(modelURL.path, cparams) else {
             throw ModelError.notConnected("whisper could not load \(modelURL.lastPathComponent)")
         }
-        defer { whisper_free(ctx) }
+        return ctx
+    }
+
+    static func full(_ ctx: OpaquePointer, modelURL: URL, samples: [Float], tinydiarize: Bool, progress: @escaping (Double) -> Void) throws -> Transcript {
         var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
         params.print_realtime = false
         params.print_progress = false

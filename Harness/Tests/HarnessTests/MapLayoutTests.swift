@@ -14,15 +14,27 @@ final class MapLayoutTests: XCTestCase {
             XCTAssertEqual(map[c.name]?.depth, c.depth, "depth of \(c.name)")
             XCTAssertEqual(map[c.name]?.branch, c.branch, "branch of \(c.name)")
         }
-        // Larger trees come first: the lone node goes last.
-        XCTAssertEqual(map.nodes.first?.id.name, "hub")
-        XCTAssertEqual(map.nodes.last?.id.name, "lone")
+        // A node linked to nothing goes first, at the top; then the trees.
+        XCTAssertEqual(map.nodes.first?.id.name, "lone")
+        XCTAssertEqual(map.nodes.dropFirst().first?.id.name, "hub")
+        XCTAssertLessThan(map["lone"]!.y, map["hub"]!.y)
 
         let tree = Dictionary(uniqueKeysWithValues: map.edges.map { ("\($0.key.lo.name)-\($0.key.hi.name)", $0.tree) })
         XCTAssertEqual(tree["a-hub"], true)
         XCTAssertEqual(tree["b-hub"], true)
         XCTAssertEqual(tree["a-c"], true)
         XCTAssertEqual(tree["c-hub"], false, "the edge closing the cycle is a cross-link")
+    }
+
+    func testOnlyThreeUnlinkedNodesGoFirst() throws {
+        let graph = try Compiler.compile("| hub - has | a\n| pair - with | mate\n| u1\n| u2\n| u3\n| u4")
+        let map = MapLayout.compute(graph)
+        let order = map.nodes.map(\.id.name)
+        XCTAssertEqual(Array(order.prefix(3)), ["u1", "u2", "u3"])
+        XCTAssertEqual(order.last, "u4", "a fourth unlinked node waits with the strays at the bottom")
+        XCTAssertLessThan(map["u3"]!.y, map["hub"]!.y)
+        // A small tree is not unlinked: it stays below the unlinked nodes.
+        XCTAssertGreaterThan(map["pair"]!.y, map["u3"]!.y)
     }
 
     func testColumnsRunLeftToRightAndSiblingsDoNotOverlap() throws {

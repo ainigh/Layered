@@ -2,12 +2,13 @@ import SwiftUI
 import Harness
 
 /// The left pane: the context as a list of items. Each text added, recording transcribed,
-/// clarification answered or reply the model wrote is an item that stays. Clicking an item
-/// puts it in the current context or takes it out (the model reads only what is selected);
-/// its open button shows it over the map, where it can be read, edited or listened to.
+/// clarification answered or reply the model wrote is an item that stays (new ones come in
+/// from the bar at the bottom of the map). Clicking an item puts it in the current context
+/// or takes it out (the model reads only what is selected); its send button puts what is
+/// new in it on the map; its open button shows it over the map, where it can be read,
+/// edited or listened to.
 struct ContextPanel: View {
     @Bindable var session: MapSession
-    var addAudio: () -> Void = {}
     @State private var showRemoved = false
 
     var body: some View {
@@ -15,7 +16,6 @@ struct ContextPanel: View {
         let shown = items.filter { showRemoved || !$0.removed }
         let removed = items.filter(\.removed).count
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            composer
             HStack(spacing: Theme.Space.xs) {
                 Text(summary(items)).font(Theme.caption).foregroundStyle(.secondary)
                 Spacer()
@@ -24,7 +24,6 @@ struct ContextPanel: View {
                         .buttonStyle(.plain).font(Theme.caption).foregroundStyle(.secondary)
                 }
             }
-            .padding(.top, Theme.Space.xs)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -46,7 +45,7 @@ struct ContextPanel: View {
                             .help("Show its progress")
                         }
                         if items.isEmpty, session.audioJob?.running != true {
-                            Text("Nothing yet. Add text or a recording above; each one becomes an item here.")
+                            Text("Nothing yet. Add text or a recording from the bar below the map; each one becomes an item here.")
                                 .font(Theme.caption).foregroundStyle(.tertiary).padding(.top, Theme.Space.s)
                         }
                     }
@@ -55,36 +54,6 @@ struct ContextPanel: View {
                     if let last = shown.last { withAnimation(Theme.slide) { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
             }
-        }
-    }
-
-    /// The new-item box: paste or type, then Add; or add a recording.
-    private var composer: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            TextEditor(text: $session.composerDraft)
-                .font(Theme.body)
-                .scrollContentBackground(.hidden)
-                .padding(Theme.Space.xs)
-                .frame(height: 96)
-                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: Theme.radiusSmall + 2))
-                .overlay(RoundedRectangle(cornerRadius: Theme.radiusSmall + 2).strokeBorder(Color.primary.opacity(0.1)))
-                .overlay(alignment: .topLeading) {
-                    if session.composerDraft.isEmpty {
-                        Text("Paste or type new context…")
-                            .font(Theme.body).foregroundStyle(.tertiary)
-                            .padding(.horizontal, Theme.Space.s + 1).padding(.vertical, Theme.Space.xs)
-                            .allowsHitTesting(false)
-                    }
-                }
-            HStack(spacing: Theme.Space.s) {
-                Button(action: addAudio) { Label("Add audio…", systemImage: "waveform") }
-                    .help("Transcribe a recording on this Mac; it joins the list as an item you can listen to")
-                Spacer()
-                Button { session.addComposer() } label: { Label("Add text", systemImage: "plus") }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(session.composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .controlSize(.small)
         }
     }
 
@@ -98,7 +67,8 @@ struct ContextPanel: View {
     }
 }
 
-/// One item: click to select or deselect it; the corner button opens it over the map.
+/// One item: click to select or deselect it; its buttons send it to the map and open it
+/// over the map.
 struct ContextRow: View {
     @Bindable var session: MapSession
     let item: ContextItem
@@ -128,6 +98,13 @@ struct ContextRow: View {
                             MapToolButton(symbol: playing ? "stop.fill" : "play.fill", help: playing ? "Stop" : "Listen") {
                                 if playing { AudioPlayer.shared.stop() } else { AudioPlayer.shared.play(audio) }
                             }
+                        }
+                        if item.kind != .model {
+                            let busy = session.running != nil || session.sentenceWalk != nil
+                            MapToolButton(symbol: item.isOnMap ? "checkmark" : "paperplane.fill",
+                                          help: item.isOnMap ? "On the map" : busy ? "The model is busy; send it when it is done" : "Send to the map: what is new in it goes on the map",
+                                          pressed: !item.isOnMap && item.selected) { session.send(item: item.id) }
+                                .disabled(item.isOnMap || busy)
                         }
                         MapToolButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open over the map") { session.open(item: item.id) }
                     }
@@ -167,7 +144,7 @@ struct ContextItemMenu: View {
         } else {
             Button("Open") { session.open(item: item.id) }
             Button(item.selected ? "Deselect" : "Select") { session.dispatch(.selectContext(item.id, !item.selected)) }
-            if item.isPending { Button("Submit to the map") { session.submit(only: item.id) }.disabled(session.running != nil) }
+            if item.kind != .model, !item.isOnMap { Button("Send to the map") { session.send(item: item.id) }.disabled(session.running != nil) }
             Button("Ask me about this") { session.askMe(about: item.id) }.disabled(session.running != nil)
             Divider()
             Button("Select its ideas on the map") { session.overlay = nil; session.selectIdeas(of: item) }

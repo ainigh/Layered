@@ -165,6 +165,17 @@ final class AppModel {
         window.makeKeyAndOrderFront(nil)
     }
 
+    /// The menu bar icon's click: the window closes when it is open in front, else it opens
+    /// (or comes to the front).
+    func toggleWindow() {
+        if let window, window.isVisible, !window.isMiniaturized, NSApp.isActive {
+            window.performClose(nil)
+        } else {
+            if let window, window.isMiniaturized { window.deminiaturize(nil) }
+            showWindow()
+        }
+    }
+
     /// The one window, kept (not released) when it's closed so it opens again as it was.
     private func makeWindow() -> NSWindow {
         let hosting = NSHostingController(rootView: MainWindow(model: self).frame(minWidth: 900, minHeight: 600))

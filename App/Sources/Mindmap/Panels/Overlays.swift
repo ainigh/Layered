@@ -1,5 +1,6 @@
 import SwiftUI
 import Harness
+import UniformTypeIdentifiers
 
 /// What opens over the map: a context item, Ask me's questions, or Check coverage's report.
 /// The map dims behind it; clicking there, the close button or Esc closes it.
@@ -22,6 +23,8 @@ struct MapOverlay: View {
                     ClarifyOverlay(session: session)
                 case .coverage:
                     CoverageOverlay(session: session)
+                case .audio:
+                    AudioOverlay(session: session)
                 }
             }
             .frame(maxWidth: 680, maxHeight: 620, alignment: .top)
@@ -345,3 +348,128 @@ struct VerifyList: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+/// Add audio: drop a recording (or choose one), then watch it go through each step, on
+/// this Mac, until it is an item in the context.
+struct AudioOverlay: View {
+    @Bindable var session: MapSession
+    @State private var targeted = false
+
+    static let kinds = ["m4a", "mp3", "wav", "aiff", "aif", "caf", "mp4"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            OverlayHeader(symbol: "waveform", tint: Theme.origin(.audio).color, title: "Add audio",
+                          subtitle: "Transcribed on this Mac with whisper; nothing leaves it.", close: { session.overlay = nil }) { EmptyView() }
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
+                    if let job = session.audioJob { progress(job) }
+                    if session.audioJob?.running != true { dropZone }
+                }
+                .padding(Theme.Space.m)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var dropZone: some View {
+        VStack(spacing: Theme.Space.s) {
+            Image(systemName: "waveform.badge.plus").font(.system(size: 34, weight: .light)).foregroundStyle(Theme.origin(.audio).color)
+            Text("Drop a recording here").font(Theme.title)
+            Text(Self.kinds.joined(separator: ", ")).font(Theme.caption).foregroundStyle(.secondary)
+            Button("Choose a file…", action: choose).controlSize(.regular)
+        }
+        .frame(maxWidth: .infinity, minHeight: 200)
+        .background(targeted ? Theme.origin(.audio).color.opacity(0.1) : Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radiusLarge).strokeBorder(targeted ? Theme.origin(.audio).color : Color.primary.opacity(0.2), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+        .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
+            guard let provider = providers.first else { return false }
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                guard let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                Task { @MainActor in start(url) }
+            }
+            return true
+        }
+    }
+
+    /// The recording's steps: done, under way (with its progress) or still to come.
+    private func progress(_ job: AudioJob) -> some View {
+        let steps: [(String, String)] = [
+            (downloadTitle(job), "arrow.down.circle"),
+            ("Read the audio", "waveform"),
+            ("Transcribe", "text.bubble"),
+            ("Find who is speaking", "person.2"),
+            ("Add it to the context", "doc.text"),
+        ]
+        let current = job.failedAt ?? job.step.rank
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            Label(job.file.lastPathComponent, systemImage: "doc.richtext").font(Theme.label)
+            ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                HStack(spacing: Theme.Space.s) {
+                    Group {
+                        if case .failed = job.step, i == current {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+                        } else if i < current {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.origin(.audio).color)
+                        } else if i == current {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "circle").foregroundStyle(.tertiary)
+                        }
+                    }
+                    .frame(width: 18)
+                    Text(step.0).font(Theme.body).foregroundStyle(i <= current ? Color.primary : Color.secondary)
+                    Spacer(minLength: 0)
+                    if i == current, let f = fraction(job) {
+                        ProgressView(value: f).frame(width: 120)
+                        Text("\(Int(f * 100))%").font(Theme.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 36, alignment: .trailing)
+                    }
+                }
+            }
+            switch job.step {
+            case .failed(let message):
+                Text(message).font(Theme.caption).foregroundStyle(.red).textSelection(.enabled)
+                Button("Try again") { session.dropAudio(job.file) }.controlSize(.small)
+            case .done(let item):
+                HStack {
+                    Text("Added to the context as item \(item), selected and ready to submit.").font(Theme.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Open it") { session.open(item: item) }.controlSize(.small)
+                }
+            default:
+                Text("You can close this; it carries on, and its progress shows in Context.").font(Theme.caption).foregroundStyle(.secondary)
+            }
+        }
+        .rowCard()
+    }
+
+    private func downloadTitle(_ job: AudioJob) -> String {
+        if case .downloading(let name, _) = job.step { return "Download the whisper model \(name) (first time only)" }
+        return "Whisper model ready"
+    }
+
+    private func fraction(_ job: AudioJob) -> Double? {
+        switch job.step {
+        case .downloading(_, let f): return f
+        case .transcribing(let f): return f
+        default: return nil
+        }
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio, .mpeg4Movie]
+        panel.prompt = "Transcribe"
+        if panel.runModal() == .OK, let url = panel.url { start(url) }
+    }
+
+    private func start(_ url: URL) {
+        guard Self.kinds.contains(url.pathExtension.lowercased()) else {
+            session.audioJob = AudioJob(file: url, step: .failed("\(url.lastPathComponent) is not a recording this can read (\(Self.kinds.joined(separator: ", ")))."), failedAt: 0)
+            return
+        }
+        session.dropAudio(url)
+    }
+}
+

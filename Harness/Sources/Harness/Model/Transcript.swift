@@ -66,9 +66,20 @@ public struct Transcript: Equatable, Sendable, Codable {
     }
 }
 
+/// Where a transcription is, so the user sees more than a spinner: the first one downloads
+/// a whisper model, which takes a while.
+public enum TranscriptionStep: Equatable, Sendable {
+    /// Downloading the named model; the fraction is nil while the size is unknown.
+    case downloadingModel(String, Double?)
+    /// Reading the file into samples.
+    case decoding
+    /// Transcribing, 0 to 1.
+    case transcribing(Double)
+}
+
 /// Runs whisper on a file. The app implements it with whisper.cpp; tests use a fixture.
 public protocol Transcriber: Sendable {
-    func transcribe(_ audio: URL, model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> Transcript
+    func transcribe(_ audio: URL, model: String, progress: @escaping @Sendable (TranscriptionStep) -> Void) async throws -> Transcript
 }
 
 /// Assigns `Speaker n` labels to segments. The app tries a local pipeline; tests use a fixture.
@@ -85,8 +96,8 @@ public struct FixtureTranscriber: Transcriber, Diarizer {
         self.labels = labels
     }
 
-    public func transcribe(_ audio: URL, model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> Transcript {
-        progress(1)
+    public func transcribe(_ audio: URL, model: String, progress: @escaping @Sendable (TranscriptionStep) -> Void) async throws -> Transcript {
+        progress(.transcribing(1))
         var t = transcript
         t.model = model
         return t

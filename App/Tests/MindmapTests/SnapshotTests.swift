@@ -63,11 +63,20 @@ final class SnapshotTests: XCTestCase {
         let session = Fixture.contextSession()
         session.clarifyQuestions = [ClarifyQuestion(sentence: 1, reason: "pronoun", question: "Who is \"they\"?")]
         session.verifyReport = VerifyReport.parse("s2\n| kim - chairs | workshop @src text @s 2")
-        let overlays: [(String, Overlay)] = [("item", .item(1)), ("reply", .item(session.state.context.items.last!.id)), ("clarify", .clarify), ("coverage", .coverage)]
+        session.audioJob = AudioJob(file: URL(fileURLWithPath: "/tmp/meeting.m4a"), step: .transcribing(0.4))
+        let overlays: [(String, Overlay)] = [("item", .item(1)), ("reply", .item(session.state.context.items.last!.id)), ("clarify", .clarify), ("coverage", .coverage), ("audio", .audio)]
         for (name, overlay) in overlays {
             for dark in [false, true] {
                 try snapshot("overlay-\(name)", MapOverlay(session: session, overlay: overlay), width: 900, height: 640, dark: dark)
             }
+        }
+    }
+
+    func testNotationAndHeldBack() throws {
+        let session = MapSession.demo(.typical)
+        for dark in [false, true] {
+            try snapshot("notation-editor", NotationEditor(session: session), width: 500, height: 320, dark: dark)
+            try snapshot("held-back", HeldBackList(session: session), width: 500, height: 320, dark: dark)
         }
     }
 

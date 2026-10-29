@@ -4,7 +4,7 @@ The whole behaviour of the app as a pure Swift package with no UI import: milest
 
 ```
 swift build      # zero warnings
-swift test       # 100 tests, about two seconds
+swift test       # 104 tests, about two seconds
 ```
 
 | Module | What it does | Spec section |
@@ -16,6 +16,7 @@ swift test       # 100 tests, about two seconds
 | `Model/Canonicaliser` | Name normal form (lowercase, article-free, singular), resolution against existing names (exact, variant, edit distance ≤ 2), and the cheap duplicate pass. | SPEC “Name stability” |
 | `Model/Gate` | The six checks before append: parse, names, proof, duplicates, provenance, budget. Returns the lines to append, the over-budget suggestions, and a `GateEvent` for every change or drop, so nothing is silently altered. | SPEC “Checks before append” |
 | `State/MapState` | `MapState` + `Action` → `MapState` via `reduce`. User actions compile to notation (`old = new`, `name =`, `@pos`, `@src user`, comment after statement); model output goes through the gate. The log is append-only by construction: it has no setter and only `appendTurn` adds to it. | SPEC “Development approach”, “Editing, history” |
+| `State/NotationEdit` | The notation drawer: compile the edited text (or say which line fails) and the lines that take the map there, appended as a user turn on top of whatever the map gained meanwhile. | SPEC “Update 2026-10-29 (2)” |
 | `State/History` | `Transition.lines(from:to:)` takes one graph to another by appending only, which is how undo and redo work; Coverage, Proof, Dedupe (cheap pass + model proposals), Outline. | SPEC “Editing, history”, “Coverage”, “Duplicates” |
 | `Model/Prompts`, `Grammar`, `ModelClient`, `OllamaClient`, `ModelRunner` | Six default prompts with per-folder overrides; the tightened GBNF with the name alternation; streaming Ollama client and a fixture client that replays recordings; the runner feeds lines to the gate as they stream, falls back when the grammar is rejected, and retries failed lines once. | SPEC “Model layer” |
 | `Model/Transcript` | Transcripts with timestamps and speakers into the evidence store; Transcriber and Diarizer protocols; the speaker map from clarification answers. | SPEC “Audio”, “Clarification” |
@@ -43,3 +44,4 @@ These are decisions the spec left open or that did not survive contact with the 
 - **Model requests read the selected items** (`MapState.modelTexts`), unless a request names its texts (sentence mode, Ask me about one item). A state with no context reads all evidence, as before.
 - **A model reply is never proof.** Its text is in the evidence store so it can be read when selected, but the gate checks against `proofEvidence`, which leaves replies out, and coverage does not count them.
 - **Open and boxed nodes.** `MapLayout` sizes `src text`/`user` nodes (and nodes with no `src`) as an icon above the name, and places edge ends beside the icon (`anchorY`, `anchorInset`); `world`, `guess` and `advice` are cards.
+- **Transcription reports steps** (`TranscriptionStep`: downloading the model, decoding, transcribing), not a bare fraction, so the app can say what it is waiting on.

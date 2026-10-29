@@ -71,6 +71,11 @@ final class AppModel {
         session = MapSession.demo(.typical)
     }
 
+    /// Starts `ollama serve` if Ollama is installed and not answering at `host`.
+    func startOllama(host: URL) {
+        ollama.startIfInstalled(host: host)
+    }
+
     /// Once the app has launched.
     func start() {
         statusBar = StatusBarController(model: self)
@@ -183,13 +188,11 @@ final class AppModel {
         capture(text)
     }
 
+    /// Add audio: the window, with the drop panel open over the map.
     func pickAudio() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.audio]
-        if panel.runModal() == .OK, let url = panel.url, let session {
-            session.dropAudio(url)
-            show(.context, session: session)
-        }
+        guard let session else { return }
+        showWindow()
+        session.overlay = .audio
     }
 
     func export(_ format: MapSession.ExportFormat) {

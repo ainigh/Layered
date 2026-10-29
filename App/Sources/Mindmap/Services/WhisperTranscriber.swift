@@ -12,12 +12,13 @@ struct WhisperTranscriber: Transcriber {
         return base
     }()
 
-    func transcribe(_ audio: URL, model: String, progress: @escaping @Sendable (Double) -> Void) async throws -> Transcript {
-        let modelURL = try await WhisperModels.ensure(model, progress: { progress($0 * 0.3) })
-        let samples = try AudioDecoder.pcm16k(audio)
-        progress(0.35)
+    func transcribe(_ audio: URL, model: String, progress: @escaping @Sendable (TranscriptionStep) -> Void) async throws -> Transcript {
+        let modelURL = try await WhisperModels.ensure(model, progress: { progress(.downloadingModel(model, $0)) })
+        progress(.decoding)
+        let samples = try await Task.detached(priority: .userInitiated) { try AudioDecoder.pcm16k(audio) }.value
+        progress(.transcribing(0))
         return try await Task.detached(priority: .userInitiated) {
-            try WhisperRun.run(modelURL: modelURL, samples: samples, tinydiarize: false, progress: { progress(0.35 + $0 * 0.65) })
+            try WhisperRun.run(modelURL: modelURL, samples: samples, tinydiarize: false, progress: { progress(.transcribing($0)) })
         }.value
     }
 }
@@ -51,16 +52,36 @@ struct WhisperDiarizer: Diarizer {
 }
 
 enum WhisperModels {
-    /// Downloads `ggml-<name>.bin` from Hugging Face on first use.
-    static func ensure(_ name: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+    /// Downloads `ggml-<name>.bin` from Hugging Face on first use, reporting how far along
+    /// it is (nil while the size is unknown). Nothing is reported when the model is there.
+    static func ensure(_ name: String, progress: @escaping @Sendable (Double?) -> Void) async throws -> URL {
         let url = WhisperTranscriber.supportDir.appendingPathComponent("ggml-\(name).bin")
         if FileManager.default.fileExists(atPath: url.path) { return url }
+        progress(nil)
         let remote = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-\(name).bin")!
-        let (temp, response) = try await URLSession.shared.download(from: remote)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ModelError.notConnected(remote.absoluteString) }
+        let watcher = DownloadWatcher(progress)
+        let (temp, response) = try await URLSession.shared.download(from: remote, delegate: watcher)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ModelError.notConnected("could not download the whisper model \(name) from \(remote.host ?? "huggingface.co")")
+        }
+        try? FileManager.default.removeItem(at: url)
         try FileManager.default.moveItem(at: temp, to: url)
         progress(1)
         return url
+    }
+
+    /// Watches a download task's progress (the async download call has no progress of its own).
+    final class DownloadWatcher: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        private let report: @Sendable (Double?) -> Void
+        private var observation: NSKeyValueObservation?
+
+        init(_ report: @escaping @Sendable (Double?) -> Void) { self.report = report }
+
+        func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+            observation = task.progress.observe(\.fractionCompleted) { [report] p, _ in
+                report(p.totalUnitCount > 0 ? p.fractionCompleted : nil)
+            }
+        }
     }
 }
 

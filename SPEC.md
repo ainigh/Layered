@@ -403,3 +403,22 @@ Ana reviews the paper.
 | Roots without filled cards | Most roots are now open nodes; a root’s name is set semibold instead |
 | Where edges meet an open node | At its icon, level with it, so a long name does not leave a gap |
 | An item you want the model to read once | Select it, ask, deselect it; the list remembers each choice |
+
+## Update 2026-10-29 (2): models, the notation drawer, adding audio
+
+**Models.** The Settings panel always asks Ollama at the host it shows (`/api/tags`) and lists what is installed with size and fit, or says plainly that Ollama is not answering there, with **Start Ollama** (runs `ollama serve` when it is installed). Changing the host or the grammar setting takes effect on the next request; the client is no longer fixed when the map opens. A demo map answers from its recordings while its model is “demo” and uses Ollama as soon as an installed model is picked. Plain-HTTP requests to a local host are allowed (`NSAllowsLocalNetworking`).
+
+**The notation drawer.** The pill in the map’s bottom left corner is now **Notation**. It opens the map written in the notation, its canonical form, as editable text. When you pause typing (0.7 s), the text is compiled and the lines that take the map to what it says are appended as one user turn (`edit notation`), so the log stays append-only and History can undo it; the map redraws at once. Text that does not compile changes nothing and the drawer shows the line and the parser’s message, with **Revert to the map**. Your edit is the difference from the map you started from, applied on top of whatever the map gained meanwhile (a model’s lines while you typed stay). The text you typed is kept as typed; it reloads from the map only when the map changes and nothing of yours is waiting. Closing the drawer with an edit waiting applies it. **Held back** is the drawer’s second tab (its count shows on the pill), so the gate still never alters the model’s output silently.
+
+**Adding audio.** **Add audio…** (in Context, the menu bar’s “Transcribe audio file…”, or dropping a recording on the map) opens a panel over the map: a drop zone and **Choose a file…** (m4a, mp3, wav, aiff, caf, mp4). Then the recording’s steps, each ticked as it finishes: download the whisper model (first time only, with its progress), read the audio, transcribe (with its progress), find who is speaking, add it to the context. A failure says what went wrong at the step it happened, with **Try again**; a recording with no speech says so. When it is done the panel says which item it became, with **Open it**. The panel can be closed at any time; the work carries on and its progress shows as a row in Context. Demo maps transcribe too (they keep the recording where it was for playback, for the session).
+
+**Gaps closed**
+
+| Gap | Decision |
+| --- | --- |
+| Picking audio did nothing visible | Demo maps used an empty stand-in transcriber; folder maps showed no progress while downloading a 1.6 GB model. Both now transcribe with whisper and show every step |
+| A recording could be kept under the wrong id | The file is stored under the text id the transcript actually gets, after transcription, not the id guessed before it (text added meanwhile shifted it) |
+| Settings showed no models | It asked the demo’s stand-in client; it now always asks Ollama |
+| Editing text vs append-only | Each pause appends the difference as a turn; nothing in the log is rewritten |
+| Model lines arriving while you edit | Your edit is applied as a difference from where you started, so they are kept |
+| Held-back drawer replaced | Kept as a tab of the same drawer, with its count on the pill |

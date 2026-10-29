@@ -31,15 +31,21 @@ struct ContextPanel: View {
                         ForEach(shown) { item in
                             ContextRow(session: session, item: item).id(item.id)
                         }
-                        if let p = session.transcribing {
-                            HStack(spacing: Theme.Space.s) {
-                                Image(systemName: "waveform").foregroundStyle(Theme.origin(.audio).color)
-                                Text("Transcribing…").font(Theme.label)
-                                ProgressView(value: p).controlSize(.small)
+                        if let job = session.audioJob, job.running {
+                            Button { session.overlay = .audio } label: {
+                                HStack(spacing: Theme.Space.s) {
+                                    Image(systemName: "waveform").foregroundStyle(Theme.origin(.audio).color)
+                                    Text(job.file.lastPathComponent).font(Theme.label).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    if let f = job.fraction { ProgressView(value: f).controlSize(.small).frame(width: 60) } else { ProgressView().controlSize(.small) }
+                                }
+                                .rowCard()
+                                .contentShape(Rectangle())
                             }
-                            .rowCard()
+                            .buttonStyle(.plain)
+                            .help("Show its progress")
                         }
-                        if items.isEmpty, session.transcribing == nil {
+                        if items.isEmpty, session.audioJob?.running != true {
                             Text("Nothing yet. Add text or a recording above; each one becomes an item here.")
                                 .font(Theme.caption).foregroundStyle(.tertiary).padding(.top, Theme.Space.s)
                         }
@@ -73,7 +79,6 @@ struct ContextPanel: View {
             HStack(spacing: Theme.Space.s) {
                 Button(action: addAudio) { Label("Add audio…", systemImage: "waveform") }
                     .help("Transcribe a recording on this Mac; it joins the list as an item you can listen to")
-                    .disabled(session.transcribing != nil)
                 Spacer()
                 Button { session.addComposer() } label: { Label("Add text", systemImage: "plus") }
                     .buttonStyle(.borderedProminent)

@@ -34,19 +34,38 @@ final class MapSession {
     var verifyReport: VerifyReport?
     var sentenceWalk: SentenceWalk?
     var sentenceMode = false
-    var transcribing: Double?
+    /// The recording being added: its steps and progress, or what went wrong.
+    var audioJob: AudioJob?
+    /// Recordings this session added, by text id (a demo keeps them where they were dropped).
+    private var audioFiles: [Int: URL] = [:]
     var viewingTurn: Int?
     /// What is open over the map: a context item, Ask me's questions, or Check coverage's report.
     var overlay: Overlay?
     /// The Context panel's new-item box, kept as it is typed.
     var composerDraft = "" { didSet { UserDefaults.standard.set(composerDraft, forKey: "draft:\(title)") } }
 
-    let runnerClient: any ModelClient
+    /// The recorded answers a demo map gives until the user picks a real model.
+    let recorded: any ModelClient
     let transcriber: any Transcriber
     let diarizer: any Diarizer
     private var bookmark: Data?
 
     var coverage: Coverage { Coverage.compute(state) }
+
+    /// Ollama at the host in Settings, made fresh so a changed host or grammar setting applies.
+    var ollama: OllamaClient {
+        OllamaClient(host: URL(string: settings.model.host) ?? URL(string: "http://localhost:11434")!, sendGrammar: settings.model.useGrammar)
+    }
+
+    /// A demo answers from recordings while its model is "demo"; any other model is Ollama's.
+    var usesRecordings: Bool { isDemo && (settings.model.model ?? Self.demoModel) == Self.demoModel }
+    static let demoModel = "demo"
+
+    /// Who model requests go to.
+    var client: any ModelClient { usesRecordings ? recorded : ollama }
+
+    /// Transcription progress for the status bar, while a recording is being added.
+    var transcribing: Double? { audioJob?.running == true ? audioJob?.fraction ?? 0 : nil }
     var isDemo: Bool { if case .demo = mode { return true } else { return false } }
 
     var title: String {
@@ -78,8 +97,9 @@ final class MapSession {
     // MARK: - Opening
 
     static func demo(_ map: Demo.Map) -> MapSession {
+        // A demo transcribes for real: dropping a recording is something the user asked for.
         MapSession(mode: .demo(map), state: Demo.state(map), storage: InMemoryStorage(), settings: Settings(), prompts: PromptSet(), ui: UIState(),
-                   client: Demo.client(), transcriber: FixtureTranscriber(transcript: Transcript(segments: [])), diarizer: FixtureTranscriber(transcript: Transcript(segments: [])))
+                   recorded: Demo.client(), transcriber: WhisperTranscriber(), diarizer: WhisperDiarizer())
     }
 
     static func open(folder: URL) throws -> MapSession {
@@ -87,9 +107,8 @@ final class MapSession {
         let loaded = try Persistence.load(storage)
         var settings = loaded.settings
         if settings.model.model == nil { settings.model.model = UserDefaults.standard.string(forKey: "lastModel") }
-        let client = OllamaClient(host: URL(string: settings.model.host) ?? URL(string: "http://localhost:11434")!, sendGrammar: settings.model.useGrammar)
         let session = MapSession(mode: .folder(folder), state: loaded.state, storage: storage, settings: settings, prompts: loaded.prompts, ui: loaded.ui,
-                                 client: client, transcriber: WhisperTranscriber(), diarizer: WhisperDiarizer())
+                                 recorded: Demo.client(), transcriber: WhisperTranscriber(), diarizer: WhisperDiarizer())
         session.bookmark = try? folder.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
         if let data = try? storage.readIconManifest(), let manifest = try? IconManifest(json: data) { session.icons = manifest; session.relayout() }
         RecentMaps.add(folder)
@@ -97,17 +116,17 @@ final class MapSession {
     }
 
     private init(mode: Mode, state: MapState, storage: any MapStorage, settings: Settings, prompts: PromptSet, ui: UIState,
-                 client: any ModelClient, transcriber: any Transcriber, diarizer: any Diarizer) {
+                 recorded: any ModelClient, transcriber: any Transcriber, diarizer: any Diarizer) {
         self.mode = mode
         self.state = state
         self.storage = storage
         self.settings = settings
         self.prompts = prompts
         self.ui = ui
-        self.runnerClient = client
+        self.recorded = recorded
         self.transcriber = transcriber
         self.diarizer = diarizer
-        if settings.model.model == nil, case .demo = mode { self.settings.model.model = "demo" }
+        if settings.model.model == nil, case .demo = mode { self.settings.model.model = Self.demoModel }
         composerDraft = UserDefaults.standard.string(forKey: "draft:\(title)") ?? ""
         relayout()
     }
@@ -222,20 +241,28 @@ final class MapSession {
         }
     }
 
+    /// Adds a recording: transcribes it on this Mac, finds its speakers, keeps the file in
+    /// the folder, and adds the transcript as a context item. Each step shows in `audioJob`.
     func dropAudio(_ url: URL) {
+        guard audioJob?.running != true else { return }
+        audioJob = AudioJob(file: url, step: .starting)
         Task {
-            transcribing = 0
-            defer { transcribing = nil }
             do {
-                let id = state.evidence.nextTextID
-                let stored = try storage.storeAudio(id: id, from: url)
-                var transcript = try await transcriber.transcribe(stored, model: settings.whisperModel) { [weak self] p in
-                    Task { @MainActor in self?.transcribing = p }
+                var transcript = try await transcriber.transcribe(url, model: settings.whisperModel) { [weak self] step in
+                    Task { @MainActor in self?.audioJob?.advance(step) }
                 }
-                transcript = (try? await diarizer.diarize(transcript, audio: stored)) ?? transcript
+                guard !transcript.segments.isEmpty else { throw AudioJob.Problem("No speech was found in \(url.lastPathComponent).") }
+                audioJob?.step = .speakers
+                transcript = (try? await diarizer.diarize(transcript, audio: url)) ?? transcript
+                audioJob?.step = .adding
+                // The id the transcript gets is the one the recording is kept under.
+                let id = state.evidence.nextTextID
+                audioFiles[id] = try storage.storeAudio(id: id, from: url)
                 dispatch(.submitTranscript(transcript))
+                audioJob?.step = .done(item: state.context.item(forText: id)?.id ?? 0)
             } catch {
-                lastError = (url.lastPathComponent, "\(error)", nil)
+                audioJob?.failedAt = audioJob?.step.rank
+                audioJob?.step = .failed((error as? AudioJob.Problem)?.message ?? (error as? ModelError).map { "\($0)" } ?? error.localizedDescription)
             }
         }
     }
@@ -255,6 +282,7 @@ final class MapSession {
     }
 
     func audioURL(for textID: Int) -> URL? {
+        if let url = audioFiles[textID] { return url }
         guard case .folder(let root) = mode else { return nil }
         let dir = root.appendingPathComponent("audio")
         return (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
@@ -264,7 +292,7 @@ final class MapSession {
     // MARK: - Model
 
     private var runner: ModelRunner {
-        ModelRunner(client: runnerClient, settings: settings.model, prompts: prompts)
+        ModelRunner(client: client, settings: settings.model, prompts: prompts)
     }
 
     @discardableResult
@@ -389,6 +417,69 @@ enum Overlay: Equatable {
     case item(Int)
     case clarify
     case coverage
+    /// Add audio: a drop zone, then the recording's steps as it is transcribed.
+    case audio
+}
+
+/// A recording being added, step by step.
+struct AudioJob: Equatable {
+    enum Step: Equatable {
+        case starting
+        /// The first time: the whisper model is downloaded (fraction nil while its size is unknown).
+        case downloading(String, Double?)
+        case decoding
+        case transcribing(Double)
+        case speakers
+        case adding
+        case done(item: Int)
+        case failed(String)
+
+        /// Its place in the list of steps the panel shows.
+        var rank: Int {
+            switch self {
+            case .starting, .downloading: return 0
+            case .decoding: return 1
+            case .transcribing: return 2
+            case .speakers: return 3
+            case .adding: return 4
+            case .done: return 5
+            case .failed: return -1
+            }
+        }
+    }
+
+    struct Problem: Error { let message: String; init(_ message: String) { self.message = message } }
+
+    let file: URL
+    var step: Step
+    /// The step that failed, to mark it in the panel.
+    var failedAt: Int?
+
+    var running: Bool {
+        switch step { case .done, .failed: return false; default: return true }
+    }
+
+    /// Overall progress, for the status bar.
+    var fraction: Double? {
+        switch step {
+        case .downloading(_, let f): return f.map { $0 * 0.3 }
+        case .transcribing(let f): return 0.35 + f * 0.6
+        case .speakers, .adding: return 0.97
+        default: return nil
+        }
+    }
+
+    /// A transcriber's step, unless the job has moved past it (progress can arrive late).
+    mutating func advance(_ t: TranscriptionStep) {
+        let next: Step
+        switch t {
+        case .downloadingModel(let name, let f): next = .downloading(name, f)
+        case .decoding: next = .decoding
+        case .transcribing(let f): next = .transcribing(f)
+        }
+        guard running, next.rank >= step.rank else { return }
+        step = next
+    }
 }
 
 /// Recent folders for the menu bar menu.

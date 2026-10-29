@@ -11,6 +11,10 @@
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHumanReadableCopyright</key><string>Local only. No data leaves this machine except to the configured Ollama host.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key><true/>
+	</dict>
 	<key>NSMicrophoneUsageDescription</key><string>Not used; audio files are transcribed from disk.</string>
 </dict>
 </plist>

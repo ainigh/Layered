@@ -50,9 +50,30 @@ tell application "System Events"
 end tell
 OSA
 
+# With the window open: is the app still answering, and does the menu still open?
+sleep 5
+echo "--- with the window open: CPU and the main thread ---"
+ps -o %cpu=,stat= -p "$pid" || true
+sample "$pid" 3 -file build/sample-window.txt >/dev/null 2>&1 || true
+sed -n '/com.apple.main-thread/,/^ *[0-9][0-9]* Thread_/p' build/sample-window.txt | head -120
+perl -e 'alarm 30; exec @ARGV' osascript <<'OSA' 2>&1 | tee -a build/click.log || true
+tell application "System Events"
+  tell process "Mindmap"
+    click menu bar item 1 of menu bar 2
+    delay 2
+    log ("menu items with the window open: " & (count of menu items of menu 1 of menu bar item 1 of menu bar 2))
+    key code 53
+  end tell
+end tell
+OSA
+
 echo "--- the app's output ---"
 head -100 build/smoke.log
 kill "$pid" 2>/dev/null || true
+if grep -q "windows after Open Mindmap: 1" build/click.log && ! grep -q "menu items with the window open: [1-9]" build/click.log; then
+  echo "❌ with the window open, the menu bar menu no longer opens"
+  exit 1
+fi
 if grep -q "windows after Open Mindmap: 0" build/click.log; then
   echo "❌ Open Mindmap in the menu bar menu opened no window"
   exit 1

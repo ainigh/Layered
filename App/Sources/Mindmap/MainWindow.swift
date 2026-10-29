@@ -24,10 +24,10 @@ enum Panel: String, CaseIterable, Identifiable {
 }
 
 /// The one window: the map fills it, with its action bar at the top and, at the bottom
-/// centre, the bar that adds text or audio (or records) with what the model is doing above
-/// it. The Context list floats over its left side and the details and other panels over its
+/// centre, the bar that adds text or audio (or records). The Context list floats over its left side and the details and other panels over its
 /// right, each opened from a pill in its top corner (as Notation opens from the bottom
-/// left), so the map never moves when a panel opens. A thin status bar below, with updates.
+/// left), so the map never moves when a panel opens. A thin status bar below: what the model,
+/// a recording or a transcription is doing, and updates.
 /// Opening something over the map closes both sides until it closes.
 struct MainWindow: View {
     @Bindable var model: AppModel
@@ -484,18 +484,25 @@ struct StatusBar: View {
                     if let retry = error.retry { Button("Retry", action: retry).controlSize(.small) }
                 }
             }
-            if let running = session.running {
-                HStack(spacing: Theme.Space.xs) {
-                    ProgressView().controlSize(.mini)
-                    Text("\(running.rawValue.capitalized) · ~\(session.runningTokens) tokens")
-                    if session.cancelRun != nil { Button("Stop") { session.stop() }.controlSize(.small) }
-                }
+            if let recording = session.recording {
+                RecordingStatus(session: session, recording: recording)
             }
-            if let p = session.transcribing {
-                HStack(spacing: Theme.Space.xs) {
-                    ProgressView(value: p).frame(width: 64).controlSize(.mini)
-                    Text("Transcribing")
+            if let walk = session.sentenceWalk {
+                WalkStatus(session: session, walk: walk)
+            }
+            if let running = session.running {
+                RunStatus(session: session, kind: running)
+            }
+            if let job = session.audioJob, job.running {
+                Button { session.overlay = .audio } label: {
+                    HStack(spacing: Theme.Space.xs) {
+                        if let f = job.fraction { ProgressView(value: f).frame(width: 64).controlSize(.mini) } else { ProgressView().controlSize(.mini) }
+                        Text("Transcribing \(job.file.lastPathComponent)").lineLimit(1).truncationMode(.middle).frame(maxWidth: 200)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .help("Show its steps")
             }
             let c = session.coverage
             Label("\(c.unsupportedNodes.count)", systemImage: "circle.dashed").help("Ideas no sentence supports")
@@ -510,6 +517,82 @@ struct StatusBar: View {
         .frame(height: 26)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// What the model is working on, for how long, and Stop (⌘.; what it sent so far is dropped).
+struct RunStatus: View {
+    @Bindable var session: MapSession
+    let kind: PromptKind
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            ProgressView().controlSize(.mini)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let seconds = session.runningSince.map { max(0, Int(context.date.timeIntervalSince($0))) } ?? 0
+                Text("\(kind.rawValue.capitalized) · \(seconds / 60):\(String(format: "%02d", seconds % 60)) · ~\(session.runningTokens) tokens").monospacedDigit()
+            }
+            Button("Stop") { session.stop() }
+                .controlSize(.small)
+                .keyboardShortcut(".", modifiers: .command)
+                .disabled(session.cancelRun == nil)
+                .help("Stop the model; what it sent so far is dropped (⌘.)")
+        }
+    }
+}
+
+/// One sentence at a time: how far along, the sentence under consideration, pause.
+struct WalkStatus: View {
+    @Bindable var session: MapSession
+    let walk: SentenceWalk
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            ProgressView(value: walk.progress).frame(width: 64).controlSize(.mini)
+            Text("Sentence \(walk.index + 1) of \(walk.sentences.count)").monospacedDigit()
+                .help(walk.current?.sentence ?? "")
+            Button(walk.paused ? "Resume" : "Pause") {
+                session.sentenceWalk?.paused.toggle()
+                if session.sentenceWalk?.paused == false { Task { await session.walkSentences() } }
+            }
+            .controlSize(.small)
+            if walk.paused {
+                Button("Stop") { session.sentenceWalk = nil }.controlSize(.small)
+                    .help("Stop here; what is not done stays waiting to be sent")
+            }
+        }
+    }
+}
+
+/// A recording under way: how long, how loud, what it is doing, the last words a live one
+/// heard, and Stop.
+struct RecordingStatus: View {
+    @Bindable var session: MapSession
+    let recording: Recording
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            TimelineView(.periodic(from: .now, by: 0.1)) { context in
+                let seconds = max(0, Int(context.date.timeIntervalSince(recording.started)))
+                let what = recording.live ? "Live map" : "Recording"
+                HStack(spacing: Theme.Space.xs) {
+                    Circle().fill(.red).frame(width: 7, height: 7)
+                        .opacity(recording.stopping || seconds % 2 == 0 ? 1 : 0.35)
+                    Text("\(what) \(seconds / 60):\(String(format: "%02d", seconds % 60))").monospacedDigit()
+                    LevelMeter(level: recording.stopping ? 0 : session.recordingLevel)
+                }
+            }
+            if let status = recording.status { Text(status).lineLimit(1) }
+            if recording.live, !recording.texts.isEmpty { Text("· \(recording.texts.count) on the map") }
+            if recording.live, let last = recording.heard.last {
+                Text("“\(last)”").italic().lineLimit(1).truncationMode(.head).frame(maxWidth: 220, alignment: .leading)
+                    .help(recording.heard.suffix(4).joined(separator: " "))
+            }
+            Button(recording.stopping ? "Finishing" : "Stop") { session.stopRecording() }
+                .controlSize(.small)
+                .disabled(recording.stopping)
+                .help(recording.live ? "Stop recording; what was said last still goes on the map" : "Stop recording and transcribe it")
+        }
     }
 }
 

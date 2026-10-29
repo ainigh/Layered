@@ -34,8 +34,15 @@ tell application "System Events"
     log ("menu bar items: " & (count of menu bar items of extras))
     click menu bar item 1 of extras
     delay 2
-    log ("menus open: " & (count of menus of menu bar item 1 of extras))
-    log (name of every menu item of menu 1 of menu bar item 1 of extras)
+    set m to menu 1 of menu bar item 1 of extras
+    log ("menu items: " & (count of menu items of m))
+    repeat with i in (menu items of m)
+      try
+        log ("  " & (title of i as text))
+      on error
+        log "  (unnamed item)"
+      end try
+    end repeat
     key code 53
   end tell
 end tell

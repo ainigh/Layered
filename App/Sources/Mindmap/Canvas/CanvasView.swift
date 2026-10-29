@@ -128,8 +128,8 @@ struct CanvasView: View {
         for edge in graph.edges.values {
             guard let pa = layout.positions[edge.a.name], let pb = layout.positions[edge.b.name] else { continue }
             let a = screen(pa, center), b = screen(pb, center)
-            let ra = Layout.radius(degree: graph.degree(of: edge.a)) * zoom * 1.3
-            let rb = Layout.radius(degree: graph.degree(of: edge.b)) * zoom * 1.3
+            let ra = CGFloat(Layout.radius(degree: graph.degree(of: edge.a))) * zoom * 1.3
+            let rb = CGFloat(Layout.radius(degree: graph.degree(of: edge.b))) * zoom * 1.3
             let d = max(hypot(b.x - a.x, b.y - a.y), 1)
             let ux = (b.x - a.x) / d, uy = (b.y - a.y) / d
             let start = CGPoint(x: a.x + ux * ra, y: a.y + uy * ra), end = CGPoint(x: b.x - ux * rb, y: b.y - uy * rb)
@@ -156,7 +156,7 @@ struct CanvasView: View {
             guard let node = graph.nodes[id], var p = layout.positions[id.name] else { continue }
             if let d = draggingNode, d.name == id.name { p.x += d.offset.width / zoom; p.y += d.offset.height / zoom }
             let c = screen(p, center)
-            let r = Layout.radius(degree: graph.degree(of: id)) * zoom
+            let r = CGFloat(Layout.radius(degree: graph.degree(of: id))) * zoom
             let kind = node.note(kind: "kind")
             let style = Theme.provenance(node.note(kind: "src"))
             let colour = Theme.kind(kind)
@@ -234,7 +234,7 @@ struct CanvasView: View {
     private func hit(_ point: CGPoint, graph: Graph, layout: Layout, center: CGPoint) -> String? {
         var best: (String, CGFloat)?
         for (name, p) in layout.positions {
-            let r = Layout.radius(degree: graph.degree(of: NodeID(name: name))) * zoom * 1.5
+            let r = CGFloat(Layout.radius(degree: graph.degree(of: NodeID(name: name)))) * zoom * 1.5
             let d = hypot(point.x - screen(p, center).x, point.y - screen(p, center).y)
             if d < r, best == nil || d < best!.1 { best = (name, d) }
         }

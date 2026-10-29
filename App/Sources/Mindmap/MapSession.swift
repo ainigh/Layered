@@ -30,14 +30,16 @@ final class MapSession {
     var pendingWrites: [String] = []
     var clarifyQuestions: [ClarifyQuestion] = []
     var clarifyContextOnly = false
-    var chatLog: [(who: String, text: String)] = []
     var dedupeProposals: [DedupeProposal] = []
     var verifyReport: VerifyReport?
     var sentenceWalk: SentenceWalk?
+    var sentenceMode = false
     var transcribing: Double?
     var viewingTurn: Int?
-    var contextDraft = ""
-    var submittedDraft: String?
+    /// What is open over the map: a context item, Ask me's questions, or Check coverage's report.
+    var overlay: Overlay?
+    /// The Context panel's new-item box, kept as it is typed.
+    var composerDraft = "" { didSet { UserDefaults.standard.set(composerDraft, forKey: "draft:\(title)") } }
 
     let runnerClient: any ModelClient
     let transcriber: any Transcriber
@@ -106,6 +108,7 @@ final class MapSession {
         self.transcriber = transcriber
         self.diarizer = diarizer
         if settings.model.model == nil, case .demo = mode { self.settings.model.model = "demo" }
+        composerDraft = UserDefaults.standard.string(forKey: "draft:\(title)") ?? ""
         relayout()
     }
 
@@ -162,31 +165,59 @@ final class MapSession {
 
     // MARK: - Context
 
-    /// Saves the context draft as it is typed (nothing is sent until Submit).
-    func saveDraft() {
-        UserDefaults.standard.set(contextDraft, forKey: "draft:\(title)")
+    /// Adds a context item (selected, not yet on the map: Submit sends it).
+    func addContext(_ text: String, kind: ContextParagraph.Kind = .typed) {
+        dispatch(.submitText(text, kind: kind))
     }
 
-    func submit(sentenceMode: Bool) {
-        let changed = Submit.changedParagraphs(previous: submittedDraft, current: contextDraft)
-        guard !changed.isEmpty else { return }
-        submittedDraft = contextDraft
-        for paragraph in changed {
-            dispatch(.submitText(paragraph))
-            let id = state.evidence.nextTextID - 1
-            if sentenceMode {
-                sentenceWalk = SentenceWalk(textID: id, sentences: state.evidence.sentences(text: id))
-                Task { await walkSentences() }
-            } else {
-                Task { await run(.extract, item: paragraph, textID: id, about: "text \(id)") }
+    /// Adds the composer's text as an item and clears the box.
+    func addComposer() {
+        guard !composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        addContext(composerDraft)
+        composerDraft = ""
+    }
+
+    var pendingItems: [ContextItem] { state.context.pendingItems }
+
+    /// Extracts every selected item that is new or edited since it went on the map; with
+    /// `only`, just that item. One sentence at a time walks their sentences in turn.
+    func submit(only: Int? = nil) {
+        let items = pendingItems.filter { only == nil || $0.id == only }
+        guard !items.isEmpty, running == nil, sentenceWalk == nil else { return }
+        let requests: [(textID: Int, text: String)] = items.compactMap { item in
+            guard let id = item.textID else { return nil }
+            let request = Submit.request(for: item)
+            // An edit that only removed text has nothing new to extract.
+            if request.isEmpty { dispatch(.markExtracted(textID: id)); return nil }
+            return (id, request)
+        }
+        guard !requests.isEmpty else { return }
+        if sentenceMode {
+            // Only the sentences of what changed (all of them the first time).
+            sentenceWalk = SentenceWalk(sentences: requests.flatMap { r in
+                let all = state.evidence.sentences(text: r.textID)
+                let changed = all.filter { r.text.contains($0.sentence) }
+                return changed.isEmpty ? all : changed
+            })
+            Task { await walkSentences() }
+        } else {
+            Task {
+                for r in requests {
+                    if await run(.extract, item: r.text, textID: r.textID, about: "text \(r.textID)") != nil {
+                        dispatch(.markExtracted(textID: r.textID))
+                    } else { break }
+                }
             }
         }
     }
 
     func walkSentences() async {
         while var walk = sentenceWalk, let sentence = walk.current, !walk.paused {
-            await run(.extract, item: ContextRenderer.single(sentence), textID: walk.textID, about: "text \(walk.textID) s\(sentence.s)", texts: [walk.textID])
-            walk.advance()
+            guard await run(.extract, item: ContextRenderer.single(sentence), textID: sentence.text, about: "text \(sentence.text) s\(sentence.s)", texts: [sentence.text]) != nil else {
+                sentenceWalk?.paused = true
+                return
+            }
+            if let done = walk.advance() { dispatch(.markExtracted(textID: done)) }
             sentenceWalk = walk.isFinished ? nil : walk
         }
     }
@@ -203,12 +234,24 @@ final class MapSession {
                 }
                 transcript = (try? await diarizer.diarize(transcript, audio: stored)) ?? transcript
                 dispatch(.submitTranscript(transcript))
-                contextDraft += (contextDraft.isEmpty ? "" : "\n\n") + transcript.rendered
-                submittedDraft = contextDraft
             } catch {
                 lastError = (url.lastPathComponent, "\(error)", nil)
             }
         }
+    }
+
+    /// Opens an item over the map.
+    func open(item id: Int) { overlay = .item(id) }
+
+    /// Selects the nodes an item's texts support.
+    func selectIdeas(of item: ContextItem) {
+        let texts = Set(item.textIDs)
+        selection = Set(state.graph.nodes.keys.filter { !Coverage.supports(of: $0, in: state.graph).isDisjoint(with: texts) }.map(\.name))
+    }
+
+    /// Forgets the ideas whose only support is this item (each of its versions).
+    func forgetIdeas(of item: ContextItem) {
+        for id in item.textIDs { dispatch(.forgetText(id)) }
     }
 
     func audioURL(for textID: Int) -> URL? {
@@ -245,13 +288,18 @@ final class MapSession {
             case .extract, .expand, .verify:
                 dispatch(.applyRun(run, about: about))
             case .chat:
+                // The map takes the lines; prose becomes a model item, opened over the map.
                 let reply = ChatReply.parse(run.rawOutput)
-                chatLog.append(("model", reply.prose))
                 if !reply.lines.isEmpty {
                     dispatch(.applyModelOutput(reply.lines.joined(separator: "\n"), prompt: .chat, textID: textID, about: about))
                 }
+                if !reply.prose.isEmpty {
+                    dispatch(.addReply(reply.prose, question: item))
+                    if let id = state.context.items.last?.id { overlay = .item(id) }
+                }
             case .clarify:
                 clarifyQuestions = ClarifyQuestion.parse(run.rawOutput)
+                overlay = .clarify
             case .dedupe:
                 dedupeProposals = Dedupe.cheapPass(state.graph) + Dedupe.proposals(fromGated: run.gate.lines)
             }
@@ -269,18 +317,18 @@ final class MapSession {
         Task { await run(.expand, item: ModelRunner.neighbourhood(of: name, in: state.graph), about: name) }
     }
 
-    func chat(_ message: String) {
-        chatLog.append(("you", message))
-        dispatch(.submitText(message, kind: .chat))
-        let id = state.evidence.nextTextID - 1
-        Task {
-            await run(.extract, item: message, textID: id, about: "text \(id)")
-            await run(.chat, item: message, textID: id, about: "chat")
-        }
+    /// Asks the model, reading the selected context. Lines it writes go on the map; prose it
+    /// writes becomes a model item, shown over the map.
+    func ask(_ message: String) {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        Task { await run(.chat, item: text, about: "ask " + String(Harness.Text.collapse(text).prefix(60))) }
     }
 
-    func askMe() {
-        Task { await run(.clarify, item: "", about: "clarify", contextOnly: clarifyContextOnly) }
+    /// Clarify: questions about the selected context, or about one item only.
+    func askMe(about item: Int? = nil) {
+        let texts = item.flatMap { state.context.item($0)?.textID }.map { [$0] }
+        Task { await run(.clarify, item: "", about: "clarify", contextOnly: clarifyContextOnly || texts != nil, texts: texts) }
     }
 
     func findDuplicates() {
@@ -290,7 +338,10 @@ final class MapSession {
 
     func checkCoverage() {
         Task {
-            if let run = await runVerify() { verifyReport = VerifyReport.parse(run.rawOutput) }
+            if let run = await runVerify() {
+                verifyReport = VerifyReport.parse(run.rawOutput)
+                overlay = .coverage
+            }
         }
     }
 
@@ -331,6 +382,13 @@ final class MapSession {
     func importMM(_ text: String) {
         if let lines = try? Import.lines(fromMM: text) { dispatch(.applyLines(lines, what: "import")) }
     }
+}
+
+/// What can open over the map. Opening one closes the side panes until it closes.
+enum Overlay: Equatable {
+    case item(Int)
+    case clarify
+    case coverage
 }
 
 /// Recent folders for the menu bar menu.

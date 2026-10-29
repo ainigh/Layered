@@ -59,6 +59,23 @@ enum Theme {
         }
     }
 
+    /// Where a context item came from: its colour, symbol and name in the Context panel. The
+    /// model's replies take a colour of their own so they never pass for what the user added.
+    struct OriginStyle {
+        let color: Color
+        let symbol: String
+        let title: String
+    }
+
+    static func origin(_ origin: ContextItem.Origin) -> OriginStyle {
+        switch origin {
+        case .you: return OriginStyle(color: accent, symbol: "text.cursor", title: "You")
+        case .audio: return OriginStyle(color: Color(red: 0.16, green: 0.62, blue: 0.56), symbol: "waveform", title: "Audio")
+        case .clarification: return OriginStyle(color: Color(red: 0.88, green: 0.48, blue: 0.12), symbol: "questionmark.bubble", title: "Clarification")
+        case .model: return OriginStyle(color: Color(red: 0.58, green: 0.36, blue: 0.86), symbol: "sparkles", title: "Model")
+        }
+    }
+
     // Three animations
     static let arrival = Animation.spring(response: 0.45, dampingFraction: 0.7)
     static let slide = Animation.easeOut(duration: 0.22)
@@ -72,14 +89,24 @@ enum Theme {
     enum Map {
         static let background = dynamic(\.background)
         static let dot = dynamic(\.dot)
-        static let card = dynamic(\.card)
-        static let outline = dynamic(\.outline)
-        static let root = dynamic(\.root)
-        static let onRoot = dynamic(\.onRoot)
         static let primary = dynamic(\.textPrimary)
         static let secondary = dynamic(\.textSecondary)
         static let tertiary = dynamic(\.textTertiary)
+        static let world = dynamic(\.world)
+        static let worldInk = dynamic(\.worldInk)
+        static let guess = dynamic(\.guess)
+        static let guessInk = dynamic(\.guessInk)
         static let advice = dynamic(\.advice)
+        static let adviceInk = dynamic(\.adviceInk)
+
+        /// A card's fill and outline: the model's extras each have their own colours.
+        static func cardColours(_ src: String?) -> (fill: Color, ink: Color) {
+            switch src {
+            case "world": return (world, worldInk)
+            case "advice": return (advice, adviceInk)
+            default: return (guess, guessInk)
+            }
+        }
         private static let inks = (0..<MapPalette.light.hues.count).map { i in dynamic { $0.hues[i].ink } }
 
         /// A first-level branch's colour for its links and outlines; nil for roots and cross-links.
@@ -87,9 +114,15 @@ enum Theme {
 
         static let nameSize: CGFloat = 13
         static let noteSize: CGFloat = 11.5
+        /// Edge labels: a step smaller than notes, and set in the secondary grey.
+        static let labelSize: CGFloat = 10.5
+        /// An open node's icon, twice its name.
+        static let iconSize: CGFloat = nameSize * 2
         static let name = Font.system(size: nameSize, weight: .medium)
+        static let rootName = Font.system(size: nameSize, weight: .semibold)
         static let note = Font.system(size: noteSize, weight: .medium)
-        static let label = Font.system(size: noteSize, weight: .medium)
+        static let label = Font.system(size: labelSize, weight: .medium)
+        static let icon = Font.system(size: iconSize, weight: .regular)
         static let corner: CGFloat = 8
         /// Bounds of the zoom; a fit never zooms a small map in past `maxFit`.
         static let minZoom: CGFloat = 0.1
@@ -108,7 +141,7 @@ enum Theme {
         @MainActor static func measure(_ text: String, _ role: MapLayout.TextRole) -> Double {
             let key = "\(role)\u{1}\(text)"
             if let w = widths[key] { return w }
-            let font = NSFont.systemFont(ofSize: role == .name ? nameSize : noteSize, weight: .medium)
+            let font = NSFont.systemFont(ofSize: role == .name ? nameSize : role == .label ? labelSize : noteSize, weight: .medium)
             let w = Double(ceil((text as NSString).size(withAttributes: [.font: font]).width))
             if widths.count > 20_000 { widths.removeAll() }
             widths[key] = w

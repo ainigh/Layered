@@ -24,7 +24,7 @@ struct MindmapApp: App {
                 Button("Open folder…") { model.openFolder() }.keyboardShortcut("o", modifiers: .command)
                 Button("Transcribe audio file…") { model.pickAudio() }
                 Divider()
-                Button("Submit") { model.session?.submit(sentenceMode: false) }.keyboardShortcut(.return, modifiers: .command)
+                Button("Submit") { model.session?.submit() }.keyboardShortcut(.return, modifiers: .command)
                 Button("Expand selection") { if let s = model.session { s.selection.forEach { s.expand($0) } } }.keyboardShortcut("e", modifiers: .command)
                 Button("Check coverage") { model.session?.checkCoverage() }
                 Button("Find duplicates") { model.session?.findDuplicates() }
@@ -58,7 +58,9 @@ final class AppModel {
     /// The panel each side pane shows; a side with none is closed.
     var shownPanels: [PanelPlacement.Edge: Panel] = [.leading: .context]
     /// What a closed pane showed last, so opening it again brings that back.
-    @ObservationIgnored private var lastShown: [PanelPlacement.Edge: Panel] = [.leading: .context, .trailing: .proof]
+    @ObservationIgnored private var lastShown: [PanelPlacement.Edge: Panel] = [.leading: .context, .trailing: .details]
+    /// The panes an overlay closed, to bring back when it closes.
+    @ObservationIgnored private var covered: [PanelPlacement.Edge: Panel]?
     let updater = Updater()
     private var ollama = OllamaLauncher()
     private var shortcut: GlobalShortcut?
@@ -89,19 +91,33 @@ final class AppModel {
         window.identifier?.rawValue.hasPrefix("main") == true
     }
 
+    /// Captured text (the global shortcut, a drop, the clipboard) becomes a context item.
     func capture(_ text: String) {
         guard let session else { return }
-        session.contextDraft += (session.contextDraft.isEmpty ? "" : "\n\n") + text
-        session.saveDraft()
+        session.addContext(text, kind: .pasted)
         show(.context, session: session)
         showWindow()
     }
 
     /// Opens `panel` in the pane on its side.
     func show(_ panel: Panel, session: MapSession) {
-        let edge = session.edge(for: panel)
-        shownPanels[edge] = panel
-        lastShown[edge] = panel
+        shownPanels[panel.edge] = panel
+        lastShown[panel.edge] = panel
+    }
+
+    /// Something opened over the map: both panes close, to come back when it closes.
+    func coverPanes() {
+        covered = shownPanels
+        withAnimation(Theme.slide) { shownPanels = [:] }
+    }
+
+    /// The overlay closed: the panes it closed come back, unless the user opened others since.
+    func uncoverPanes() {
+        guard let covered else { return }
+        withAnimation(Theme.slide) {
+            for (edge, panel) in covered where shownPanels[edge] == nil { shownPanels[edge] = panel }
+        }
+        self.covered = nil
     }
 
     func hidePane(_ edge: PanelPlacement.Edge) {
@@ -113,19 +129,10 @@ final class AppModel {
             if shownPanels[edge] != nil {
                 shownPanels[edge] = nil
             } else {
-                let docked = Panel.allCases.filter { session.edge(for: $0) == edge }
+                let docked = Panel.allCases.filter { $0.edge == edge }
                 shownPanels[edge] = lastShown[edge].flatMap { docked.contains($0) ? $0 : nil } ?? docked.first
             }
         }
-    }
-
-    /// A panel moved to the other side: the side it left shows another of its panels, and
-    /// the panel opens where it went.
-    func panelMoved(_ panel: Panel, session: MapSession) {
-        for (edge, shown) in shownPanels where shown == panel && session.edge(for: panel) != edge {
-            shownPanels[edge] = Panel.allCases.first { $0 != panel && session.edge(for: $0) == edge }
-        }
-        show(panel, session: session)
     }
 
     /// Opens the window (or brings it back) in front of other apps. A menu bar-only app can't come

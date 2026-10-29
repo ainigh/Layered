@@ -12,12 +12,6 @@ public struct MapPalette: Equatable, Sendable {
     /// The map's background and its dot grid.
     public let background: String
     public let dot: String
-    /// A node's card and outline.
-    public let card: String
-    public let outline: String
-    /// A root's card is filled with `root`, its text set in `onRoot`.
-    public let root: String
-    public let onRoot: String
     public let textPrimary: String
     public let textSecondary: String
     public let textTertiary: String
@@ -43,8 +37,7 @@ public struct MapPalette: Equatable, Sendable {
             Hue(ink: "#ad4f19", tint: "#f7e0d0"), Hue(ink: "#9e3898", tint: "#f1d9f0"),
             Hue(ink: "#5a6a10", tint: "#e8edcc"), Hue(ink: "#4d5b6e", tint: "#dfe3e8"),
         ],
-        background: "#f4f5f8", dot: "#d3d6dd", card: "#ffffff", outline: "#d0d3da",
-        root: "#232835", onRoot: "#ffffff",
+        background: "#f4f5f8", dot: "#d3d6dd",
         textPrimary: "#151821", textSecondary: "#454c5c", textTertiary: "#6b7282",
         world: "#e3edfb", worldInk: "#3d6fc4", guess: "#eef0f3", guessInk: "#8a909c",
         advice: "#fdf1dc", adviceInk: "#b7791f")
@@ -57,8 +50,7 @@ public struct MapPalette: Equatable, Sendable {
             Hue(ink: "#ffa36b", tint: "#2a170b"), Hue(ink: "#f08ee8", tint: "#26112a"),
             Hue(ink: "#c4d65a", tint: "#1d200a"), Hue(ink: "#a9b6c8", tint: "#161a20"),
         ],
-        background: "#16181d", dot: "#2e313a", card: "#2a2d35", outline: "#41454f",
-        root: "#e9ebf0", onRoot: "#151821",
+        background: "#16181d", dot: "#2e313a",
         textPrimary: "#f3f4f7", textSecondary: "#c0c5d0", textTertiary: "#9aa1ae",
         world: "#172338", worldInk: "#8db4ff", guess: "#25272d", guessInk: "#7d8493",
         advice: "#3a2c14", adviceInk: "#f2b75a")

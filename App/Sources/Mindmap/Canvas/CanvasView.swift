@@ -1,9 +1,10 @@
 import SwiftUI
 import Harness
 
-/// The mind map, drawn the way GridClip draws one: left-to-right trees of rounded cards on
-/// a dot grid that travels with the map, each first-level branch in its own colour, roots
-/// filled, cross-links dashed. Everything drawn comes from `session.displayedLayout`.
+/// The mind map, drawn the way GridClip draws one: left-to-right trees on a dot grid that
+/// travels with the map, each first-level branch in its own colour, cross-links dashed.
+/// What the context or the user says is open (its icon above its name); the model's extras
+/// are cards in their provenance's colours. Everything drawn comes from `session.displayedLayout`.
 ///
 ///   drag empty space      move the map          scroll        move the map
 ///   pinch, ⌘-scroll       zoom about the pointer double-click  zoom in there (on a node: expand)
@@ -85,7 +86,9 @@ struct CanvasView: View {
                 }
                 if layout.nodes.isEmpty { EmptyMap() }
                 if let turn = session.viewingTurn {
+                    // Bottom centre: the top of the map holds the action bar.
                     VStack {
+                        Spacer()
                         HStack(spacing: Theme.Space.s) {
                             Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
                             Text("Turn \(turn), read-only").font(Theme.label)
@@ -93,7 +96,6 @@ struct CanvasView: View {
                         }
                         .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.xs).padding(.vertical, Theme.Space.xs)
                         .floatingBar(in: Capsule())
-                        Spacer()
                     }
                     .padding(Theme.Space.m)
                 }
@@ -285,64 +287,89 @@ struct CanvasView: View {
     }
 
     private func drawNode(_ p: MapLayout.PlacedNode, _ node: Node, in ctx: inout GraphicsContext) {
-        typealias M = MapLayout.Metrics
         let rect = CGRect(x: p.x, y: p.y, width: p.w, height: p.h)
-        let card = Path(roundedRect: rect, cornerRadius: Theme.Map.corner)
         let src = node.note(kind: "src")
-        let style = Theme.provenance(src)
-        let root = p.depth == 0
-        let ink = Theme.Map.branch(p.branch)
         let selected = session.selection.contains(p.id.name)
         let fresh = session.highlighted[p.id.name].map { now.timeIntervalSince($0) < Theme.highlightSeconds } ?? false
 
-        if src == "guess" { ctx.opacity *= style.opacity }
+        if src == "guess" { ctx.opacity *= Theme.provenance(src).opacity }
         if fresh {
             ctx.fill(Path(roundedRect: rect.insetBy(dx: -6, dy: -6), cornerRadius: Theme.Map.corner + 6), with: .color(Theme.accent.opacity(0.22)))
         }
         if selected {
-            ctx.stroke(Path(roundedRect: rect.insetBy(dx: -3.5, dy: -3.5), cornerRadius: Theme.Map.corner + 3.5), with: .color(Theme.accent), lineWidth: 2)
+            let ring = Path(roundedRect: rect.insetBy(dx: -3.5, dy: -3.5), cornerRadius: Theme.Map.corner + 3.5)
+            if !p.boxed { ctx.fill(ring, with: .color(Theme.accent.opacity(0.1))) }
+            ctx.stroke(ring, with: .color(Theme.accent), lineWidth: 2)
         }
-        if !root {
-            // A soft lift, like GridClip's boxes.
-            ctx.fill(Path(roundedRect: rect.offsetBy(dx: 0, dy: 1), cornerRadius: Theme.Map.corner), with: .color(.black.opacity(0.06)))
+        if p.boxed { drawCard(p, node, rect: rect, src: src, in: &ctx) } else { drawOpen(p, node, in: &ctx) }
+    }
+
+    /// The node's icon: its own, a matching one from the icon set, or its kind's glyph.
+    private func symbol(for p: MapLayout.PlacedNode, kind: String?) -> String {
+        session.icons.icons(for: p.id.name).first { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil }
+            ?? IconManifest.fallbackSymbol(kind: kind)
+    }
+
+    /// From the context or the user: the icon above the name, no card.
+    private func drawOpen(_ p: MapLayout.PlacedNode, _ node: Node, in ctx: inout GraphicsContext) {
+        typealias M = MapLayout.Metrics
+        let kind = node.note(kind: "kind")
+        let cx = p.x + p.w / 2
+        let iconY = p.y + p.anchorY
+        let ink = kind == nil ? Theme.Map.branch(p.branch) ?? Theme.Map.secondary : Theme.kind(kind)
+        ctx.draw(Text(Image(systemName: symbol(for: p, kind: kind))).font(Theme.Map.icon).foregroundStyle(ink), at: CGPoint(x: cx, y: iconY), anchor: .center)
+        if p.badge, let badge = Theme.provenance(node.note(kind: "src")).badge {
+            ctx.draw(Text(Image(systemName: badge)).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.Map.tertiary),
+                     at: CGPoint(x: cx + M.iconBox / 2 + 3, y: iconY - M.iconLine / 2 + 5), anchor: .center)
         }
-        ctx.fill(card, with: .color(root ? Theme.Map.root : src == "advice" ? Theme.Map.advice : Theme.Map.card))
-        if !root {
-            ctx.stroke(card, with: .color(ink ?? Theme.Map.outline), style: StrokeStyle(lineWidth: ink == nil ? 1 : 1.5, dash: style.dash))
-            if style.doubleBorder {
-                ctx.stroke(Path(roundedRect: rect.insetBy(dx: 3, dy: 3), cornerRadius: Theme.Map.corner - 3), with: .color(ink ?? Theme.Map.outline), lineWidth: 1)
-            }
+        let nameY = p.y + M.openPadY + M.iconLine + M.iconGap + M.nameLine / 2
+        ctx.draw(Text(p.name).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary), at: CGPoint(x: cx, y: nameY), anchor: .center)
+        for (i, note) in p.notes.enumerated() {
+            let y = nameY + M.nameLine / 2 + (Double(i) + 0.5) * M.noteLine
+            ctx.draw(noteText(note), at: CGPoint(x: cx, y: y), anchor: .center)
+        }
+    }
+
+    /// The model's extras: a card in the colours of its provenance (world, guess, advice).
+    private func drawCard(_ p: MapLayout.PlacedNode, _ node: Node, rect: CGRect, src: String?, in ctx: inout GraphicsContext) {
+        typealias M = MapLayout.Metrics
+        let card = Path(roundedRect: rect, cornerRadius: Theme.Map.corner)
+        let style = Theme.provenance(src)
+        let colours = Theme.Map.cardColours(src)
+        // A soft lift, like GridClip's boxes.
+        ctx.fill(Path(roundedRect: rect.offsetBy(dx: 0, dy: 1), cornerRadius: Theme.Map.corner), with: .color(.black.opacity(0.06)))
+        ctx.fill(card, with: .color(colours.fill))
+        ctx.stroke(card, with: .color(colours.ink), style: StrokeStyle(lineWidth: style.lineWidth, dash: style.dash))
+        if style.doubleBorder {
+            ctx.stroke(Path(roundedRect: rect.insetBy(dx: 3, dy: 3), cornerRadius: Theme.Map.corner - 3), with: .color(colours.ink), lineWidth: 1)
         }
 
         let nameY = p.y + M.padY + M.nameLine / 2
         var x = p.x + M.padX
         if p.glyph {
             let kind = node.note(kind: "kind")
-            let symbol = session.icons.icons(for: p.id.name).first { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil }
-                ?? IconManifest.fallbackSymbol(kind: kind)
-            ctx.draw(Text(Image(systemName: symbol)).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(root ? Theme.Map.onRoot.opacity(0.85) : Theme.kind(kind)),
+            ctx.draw(Text(Image(systemName: symbol(for: p, kind: kind))).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.kind(kind)),
                      at: CGPoint(x: x + 6, y: nameY), anchor: .center)
             x += M.glyph
         }
-        ctx.draw(Text(p.name).font(Theme.Map.name).foregroundStyle(root ? Theme.Map.onRoot : Theme.Map.primary), at: CGPoint(x: x, y: nameY), anchor: .leading)
+        ctx.draw(Text(p.name).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary), at: CGPoint(x: x, y: nameY), anchor: .leading)
         if p.badge, let badge = style.badge {
-            ctx.draw(Text(Image(systemName: badge)).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(root ? Theme.Map.onRoot.opacity(0.8) : style.tint ?? Theme.Map.tertiary),
+            ctx.draw(Text(Image(systemName: badge)).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(colours.ink),
                      at: CGPoint(x: p.x + p.w - M.padX - M.badge / 2 + 3, y: nameY), anchor: .center)
         }
         for (i, note) in p.notes.enumerated() {
             let y = p.y + M.padY + M.nameLine + (Double(i) + 0.5) * M.noteLine
-            ctx.draw(noteText(note, root: root), at: CGPoint(x: p.x + M.padX, y: y), anchor: .leading)
+            ctx.draw(noteText(note), at: CGPoint(x: p.x + M.padX, y: y), anchor: .leading)
         }
     }
 
     /// `date 2026-11-03`: the kind is set quieter than what it says.
-    private func noteText(_ note: String, root: Bool) -> Text {
-        let value = root ? Theme.Map.onRoot.opacity(0.85) : Theme.Map.secondary
+    private func noteText(_ note: String) -> Text {
         if let split = NoteKind.split(note), split.kind.count <= 12, !split.value.isEmpty {
-            return Text(split.kind + " ").font(Theme.Map.note).foregroundStyle(root ? Theme.Map.onRoot.opacity(0.65) : Theme.Map.tertiary)
-                + Text(split.value).font(Theme.Map.note).foregroundStyle(value)
+            return Text(split.kind + " ").font(Theme.Map.note).foregroundStyle(Theme.Map.tertiary)
+                + Text(split.value).font(Theme.Map.note).foregroundStyle(Theme.Map.secondary)
         }
-        return Text(note).font(Theme.Map.note).foregroundStyle(value)
+        return Text(note).font(Theme.Map.note).foregroundStyle(Theme.Map.secondary)
     }
 
     private func drawEdge(_ e: MapLayout.PlacedEdge, _ edge: Edge?, lit: Bool, in ctx: inout GraphicsContext) {
@@ -377,7 +404,7 @@ struct CanvasView: View {
     private func drawLabel(_ e: MapLayout.PlacedEdge, in ctx: inout GraphicsContext) {
         let lines = [(e.label, true), (e.note, false)].filter { !$0.0.isEmpty }
         for (i, line) in lines.enumerated() {
-            var text = Text(line.0).font(Theme.Map.label).foregroundStyle(line.1 ? Theme.Map.primary : Theme.Map.secondary)
+            var text = Text(line.0).font(Theme.Map.label).foregroundStyle(line.1 ? Theme.Map.secondary : Theme.Map.tertiary)
             if !e.tree { text = text.italic() }
             let resolved = ctx.resolve(text)
             let s = resolved.measure(in: CGSize(width: 1000, height: 100))
@@ -488,7 +515,7 @@ struct CanvasView: View {
                 if session.icons.entries.isEmpty { Text("Add SVGs to icons/ in the folder") }
             }
             if session.layout[name]?.pinned == true { Button("Release pin") { session.dispatch(.release(name)) } }
-            Button("Show proof") { session.selection = [name] }
+            Button("Show details") { session.selection = [name] }
             Divider()
             Button("Delete", role: .destructive) { session.dispatch(.delete(name)); session.selection = [] }
         } else if names.count > 1 {
@@ -575,6 +602,7 @@ struct MapToolButton: View {
     var pressed = false
     let action: () -> Void
     @State private var hover = false
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         Button(action: action) {
@@ -586,6 +614,7 @@ struct MapToolButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .opacity(enabled ? 1 : 0.4)
         .help(help)
         .onHover { hover = $0 }
         .animation(Theme.selection, value: hover)
@@ -607,7 +636,7 @@ struct EmptyMap: View {
         VStack(spacing: Theme.Space.s) {
             Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 34, weight: .light)).foregroundStyle(.tertiary)
             Text("No map yet").font(Theme.title)
-            Text("Paste text into Context and press Submit,\nor drop a text or audio file here.").font(Theme.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text("Add text or audio in Context and press Submit,\nor drop a text or audio file here.").font(Theme.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .padding(Theme.Space.l)
         .allowsHitTesting(false)

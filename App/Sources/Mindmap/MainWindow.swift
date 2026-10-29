@@ -3,15 +3,13 @@ import Harness
 import UniformTypeIdentifiers
 
 enum Panel: String, CaseIterable, Identifiable {
-    case context, clarify, proof, chat, outline, prompt, settings, history
+    case context, details, outline, history, prompt, settings
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var symbol: String {
         switch self {
         case .context: return "doc.text"
-        case .clarify: return "questionmark.bubble"
-        case .proof: return "checkmark.seal"
-        case .chat: return "bubble.left.and.bubble.right"
+        case .details: return "info.circle"
         case .outline: return "list.bullet.indent"
         case .prompt: return "text.quote"
         case .settings: return "gearshape"
@@ -19,16 +17,15 @@ enum Panel: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The side a panel docks to until the user moves it.
-    var defaultEdge: PanelPlacement.Edge {
-        [.context, .clarify, .chat, .outline].contains(self) ? .leading : .trailing
-    }
+    /// The left pane holds the context and nothing else; every other panel opens on the right.
+    var edge: PanelPlacement.Edge { self == .context ? .leading : .trailing }
 
     var defaultWidth: Double { self == .prompt || self == .settings ? 400 : 340 }
 }
 
-/// The one window: the map in the middle, a pane on each side that shows one panel at a
-/// time (picked from the pane's tab strip), a thin status bar below.
+/// The one window: the map in the middle with its action bar, the Context list on the
+/// left, the selected node's details and the other panels on the right, a thin status bar
+/// below. Opening something over the map closes both sides until it closes.
 struct MainWindow: View {
     @Bindable var model: AppModel
 
@@ -58,16 +55,22 @@ struct MapWindow: View {
                             handleDrop(providers)
                         }
                     HeldBackDrawer(session: session)
+                    MapActionBar(session: session)
+                    if let overlay = session.overlay {
+                        MapOverlay(session: session, overlay: overlay)
+                            .transition(.opacity)
+                    }
                 }
                 .frame(minWidth: 360)
                 pane(.trailing)
             }
             StatusBar(session: session, model: model)
         }
+        .animation(Theme.slide, value: session.overlay)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                Button { model.togglePane(.leading, session: session) } label: { Label("Left pane", systemImage: "sidebar.left") }
-                    .help("Show or hide the left pane")
+                Button { model.togglePane(.leading, session: session) } label: { Label("Context", systemImage: "sidebar.left") }
+                    .help("Show or hide the context")
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 if let running = session.running {
@@ -80,17 +83,18 @@ struct MapWindow: View {
                     .help("Expand the selected nodes (⌘E)")
                     .disabled(session.selection.isEmpty || session.running != nil)
                 Button { model.togglePane(.trailing, session: session) } label: { Label("Right pane", systemImage: "sidebar.right") }
-                    .help("Show or hide the right pane")
+                    .help("Show or hide the details and other panels")
             }
         }
-        .onAppear {
-            session.contextDraft = UserDefaults.standard.string(forKey: "draft:\(session.title)") ?? session.state.context.plainText
-            session.submittedDraft = session.contextDraft
-        }
         .onChange(of: session.selection) { _, selection in
-            // Selecting a node shows its proof, if the Proof panel's pane is open.
-            let edge = session.edge(for: .proof)
-            if !selection.isEmpty, model.shownPanels[edge] != nil, model.shownPanels[edge] != .proof { model.show(.proof, session: session) }
+            // Clicking a node opens its details on the right.
+            if !selection.isEmpty { withAnimation(Theme.slide) { model.show(.details, session: session) } }
+        }
+        .onChange(of: session.selectedEdge) { _, edge in
+            if edge != nil { withAnimation(Theme.slide) { model.show(.details, session: session) } }
+        }
+        .onChange(of: session.overlay) { old, new in
+            if old == nil, new != nil { model.coverPanes() } else if old != nil, new == nil { model.uncoverPanes() }
         }
     }
 
@@ -105,10 +109,8 @@ struct MapWindow: View {
     @ViewBuilder
     private func panelBody(_ panel: Panel) -> some View {
         switch panel {
-        case .context: ContextPanel(session: session)
-        case .clarify: ClarifyPanel(session: session)
-        case .proof: ProofPanel(session: session)
-        case .chat: ChatPanel(session: session)
+        case .context: ContextPanel(session: session, addAudio: { model.pickAudio() })
+        case .details: DetailsPanel(session: session)
         case .outline: OutlinePanel(session: session)
         case .prompt: PromptPanel(session: session)
         case .settings: SettingsPanel(session: session)
@@ -124,6 +126,7 @@ struct MapWindow: View {
                     Task { @MainActor in
                         if ["m4a", "mp3", "wav", "aiff", "caf"].contains(url.pathExtension.lowercased()) {
                             session.dropAudio(url)
+                            model.show(.context, session: session)
                         } else if url.pathExtension == "mm", let text = try? String(contentsOf: url, encoding: .utf8) {
                             session.importMM(text)
                         } else if let text = try? String(contentsOf: url, encoding: .utf8) {
@@ -147,18 +150,12 @@ struct MapWindow: View {
 }
 
 extension MapSession {
-    /// Where a panel sits: where the user put it, or its default side.
+    /// Where a panel sits: its side, and the width the user dragged it to (or its default).
     func placement(_ panel: Panel) -> PanelPlacement {
-        if let p = ui.panels[panel.rawValue] { return p }
-        var p = PanelPlacement()
-        p.edge = panel.defaultEdge
-        p.width = panel.defaultWidth
+        var p = ui.panels[panel.rawValue] ?? PanelPlacement()
+        if ui.panels[panel.rawValue] == nil { p.width = panel.defaultWidth }
+        p.edge = panel.edge
         return p
-    }
-
-    /// The side a panel docks to (only left and right are used).
-    func edge(for panel: Panel) -> PanelPlacement.Edge {
-        placement(panel).edge == .leading ? .leading : .trailing
     }
 
     func setPlacement(_ panel: Panel, _ p: PanelPlacement) {
@@ -167,8 +164,8 @@ extension MapSession {
     }
 }
 
-/// One side of the window: a tab strip of the panels docked there, then the shown panel.
-/// The inner edge drags to resize; a panel's menu moves it to the other side.
+/// One side of the window: on the right a tab strip of its panels, then the shown panel.
+/// The inner edge drags to resize.
 struct SidePane<Content: View>: View {
     let edge: PanelPlacement.Edge
     let panel: Panel
@@ -183,15 +180,11 @@ struct SidePane<Content: View>: View {
         HStack(spacing: 0) {
             if edge == .trailing { resizeHandle(placement) }
             VStack(spacing: 0) {
-                PaneTabs(edge: edge, selected: panel, session: session, model: model)
-                Divider()
+                if edge == .trailing {
+                    PaneTabs(edge: edge, selected: panel, session: session, model: model)
+                    Divider()
+                }
                 PanelContainer(title: panel.title, symbol: panel.symbol,
-                               placement: Binding(get: { session.placement(panel) }, set: { new in
-                                   withAnimation(Theme.slide) {
-                                       session.setPlacement(panel, new)
-                                       model.panelMoved(panel, session: session)
-                                   }
-                               }),
                                onClose: { withAnimation(Theme.slide) { model.hidePane(edge) } },
                                content: content)
             }
@@ -231,19 +224,9 @@ struct PaneTabs: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(Panel.allCases.filter { session.edge(for: $0) == edge }) { panel in
+            ForEach(Panel.allCases.filter { $0.edge == edge }) { panel in
                 MapToolButton(symbol: panel.symbol, help: panel.title, pressed: panel == selected) {
                     withAnimation(Theme.selection) { model.show(panel, session: session) }
-                }
-                .contextMenu {
-                    Button(edge == .leading ? "Move to Right Pane" : "Move to Left Pane") {
-                        var p = session.placement(panel)
-                        p.edge = edge == .leading ? .trailing : .leading
-                        withAnimation(Theme.slide) {
-                            session.setPlacement(panel, p)
-                            model.panelMoved(panel, session: session)
-                        }
-                    }
                 }
             }
             Spacer(minLength: 0)
@@ -258,7 +241,6 @@ struct PaneTabs: View {
 struct PanelContainer<Content: View>: View {
     let title: String
     let symbol: String
-    @Binding var placement: PanelPlacement
     let onClose: () -> Void
     @ViewBuilder let content: () -> Content
 
@@ -268,9 +250,6 @@ struct PanelContainer<Content: View>: View {
                 Text(title).font(Theme.title)
                 Spacer()
                 Menu {
-                    Button(placement.edge == .leading ? "Move to Right Pane" : "Move to Left Pane") {
-                        placement.edge = placement.edge == .leading ? .trailing : .leading
-                    }
                     Button("Close Pane", action: onClose)
                 } label: {
                     Image(systemName: "ellipsis.circle")

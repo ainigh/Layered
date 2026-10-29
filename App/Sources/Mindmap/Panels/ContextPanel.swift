@@ -1,85 +1,188 @@
 import SwiftUI
 import Harness
-import AVFoundation
 
+/// The left pane: the context as a list of items. Each text added, recording transcribed,
+/// clarification answered or reply the model wrote is an item that stays. Clicking an item
+/// puts it in the current context or takes it out (the model reads only what is selected);
+/// its open button shows it over the map, where it can be read, edited or listened to.
 struct ContextPanel: View {
     @Bindable var session: MapSession
-    @State private var sentenceMode = false
+    var addAudio: () -> Void = {}
+    @State private var showRemoved = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
-            TextEditor(text: $session.contextDraft)
+        let items = session.state.context.items
+        let shown = items.filter { showRemoved || !$0.removed }
+        let removed = items.filter(\.removed).count
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            composer
+            HStack(spacing: Theme.Space.xs) {
+                Text(summary(items)).font(Theme.caption).foregroundStyle(.secondary)
+                Spacer()
+                if removed > 0 {
+                    Button(showRemoved ? "Hide deleted" : "\(removed) deleted") { withAnimation(Theme.slide) { showRemoved.toggle() } }
+                        .buttonStyle(.plain).font(Theme.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.top, Theme.Space.xs)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        ForEach(shown) { item in
+                            ContextRow(session: session, item: item).id(item.id)
+                        }
+                        if let p = session.transcribing {
+                            HStack(spacing: Theme.Space.s) {
+                                Image(systemName: "waveform").foregroundStyle(Theme.origin(.audio).color)
+                                Text("Transcribing…").font(Theme.label)
+                                ProgressView(value: p).controlSize(.small)
+                            }
+                            .rowCard()
+                        }
+                        if items.isEmpty, session.transcribing == nil {
+                            Text("Nothing yet. Add text or a recording above; each one becomes an item here.")
+                                .font(Theme.caption).foregroundStyle(.tertiary).padding(.top, Theme.Space.s)
+                        }
+                    }
+                }
+                .onChange(of: items.count) { _, _ in
+                    if let last = shown.last { withAnimation(Theme.slide) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                }
+            }
+        }
+    }
+
+    /// The new-item box: paste or type, then Add; or add a recording.
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            TextEditor(text: $session.composerDraft)
                 .font(Theme.body)
                 .scrollContentBackground(.hidden)
-                .padding(Theme.Space.s)
-                .frame(minHeight: 180, maxHeight: .infinity)
+                .padding(Theme.Space.xs)
+                .frame(height: 96)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: Theme.radiusSmall + 2))
                 .overlay(RoundedRectangle(cornerRadius: Theme.radiusSmall + 2).strokeBorder(Color.primary.opacity(0.1)))
-                .onChange(of: session.contextDraft) { _, _ in session.saveDraft() }
                 .overlay(alignment: .topLeading) {
-                    if session.contextDraft.isEmpty {
-                        Text("Paste or type text here, or drop an audio file on the map.")
+                    if session.composerDraft.isEmpty {
+                        Text("Paste or type new context…")
                             .font(Theme.body).foregroundStyle(.tertiary)
-                            .padding(.horizontal, Theme.Space.s + 5).padding(.vertical, Theme.Space.s)
+                            .padding(.horizontal, Theme.Space.s + 1).padding(.vertical, Theme.Space.xs)
                             .allowsHitTesting(false)
                     }
                 }
             HStack(spacing: Theme.Space.s) {
-                Picker("Submit", selection: $sentenceMode) {
-                    Text("All at once").tag(false)
-                    Text("Sentence by sentence").tag(true)
-                }
-                .pickerStyle(.menu).labelsHidden().fixedSize()
+                Button(action: addAudio) { Label("Add audio…", systemImage: "waveform") }
+                    .help("Transcribe a recording on this Mac; it joins the list as an item you can listen to")
+                    .disabled(session.transcribing != nil)
                 Spacer()
-                Button("Check coverage") { session.checkCoverage() }.disabled(session.running != nil)
-                Button("Submit") { session.submit(sentenceMode: sentenceMode) }
+                Button { session.addComposer() } label: { Label("Add text", systemImage: "plus") }
                     .buttonStyle(.borderedProminent)
-                    .disabled(session.running != nil || session.contextDraft == session.submittedDraft)
+                    .disabled(session.composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .controlSize(.regular)
-            if let walk = session.sentenceWalk {
-                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    HStack {
-                        ProgressView(value: walk.progress)
-                        Text("\(walk.index + 1) of \(walk.sentences.count)").font(Theme.caption).foregroundStyle(.secondary).monospacedDigit()
-                        Button(walk.paused ? "Resume" : "Pause") {
-                            session.sentenceWalk?.paused.toggle()
-                            if session.sentenceWalk?.paused == false { Task { await session.walkSentences() } }
-                        }.controlSize(.small)
-                    }
-                    if let s = walk.current { Text(s.sentence).font(Theme.caption).foregroundStyle(.secondary).lineLimit(2) }
-                }
-            }
-            if let report = session.verifyReport {
-                VerifyList(session: session, report: report)
-            }
-            let sources = session.state.context.paragraphs.filter { $0.textID != nil }
-            if !sources.isEmpty {
-                SectionTitle("Sources", count: sources.count)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                        ForEach(sources, id: \.textID) { p in
-                            HStack(alignment: .top, spacing: Theme.Space.s) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Text \(p.textID!) · \(p.kind.rawValue)").font(Theme.label)
-                                    Text(p.body).font(Theme.caption).lineLimit(2).foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                                Menu {
-                                    Button("Select its ideas on the map") {
-                                        session.selection = Set(session.state.graph.nodes.keys.filter { Coverage.supports(of: $0, in: session.state.graph).contains(p.textID!) }.map(\.name))
-                                    }
-                                    Button("Forget this text", role: .destructive) { session.dispatch(.forgetText(p.textID!)) }
-                                } label: { Image(systemName: "ellipsis") }
-                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .controlSize(.small)
+        }
+    }
+
+    private func summary(_ items: [ContextItem]) -> String {
+        let live = items.filter { !$0.removed }
+        guard !live.isEmpty else { return "No context yet" }
+        let pending = live.filter(\.isPending).count
+        var parts = ["\(live.filter(\.selected).count) of \(live.count) selected"]
+        if pending > 0 { parts.append("\(pending) not on the map yet") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// One item: click to select or deselect it; the corner button opens it over the map.
+struct ContextRow: View {
+    @Bindable var session: MapSession
+    let item: ContextItem
+
+    var body: some View {
+        let style = Theme.origin(item.origin)
+        let audio = item.kind == .transcript ? item.textID.flatMap { session.audioURL(for: $0) } : nil
+        HStack(alignment: .top, spacing: Theme.Space.s) {
+            Image(systemName: item.selected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 15))
+                .foregroundStyle(item.selected ? style.color : Color.secondary.opacity(0.6))
+                .padding(.top, 1)
+                .help(item.selected ? "In the context: the model reads it" : "Not in the context")
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: Theme.Space.xs) {
+                    Image(systemName: style.symbol).font(Theme.caption).foregroundStyle(style.color)
+                    Text(style.title).font(Theme.label).foregroundStyle(item.origin == .model ? style.color : .primary)
+                    Text(item.added.formatted(date: .omitted, time: .shortened)).font(Theme.caption).foregroundStyle(.tertiary)
+                    if item.edited != nil { Text("edited").font(Theme.caption).foregroundStyle(.tertiary) }
+                    if item.isPending { Pill(text: item.lastExtracted == nil ? "not on map" : "changed", tint: Theme.accent) }
+                    Spacer(minLength: 0)
+                    if item.removed {
+                        Button("Restore") { session.dispatch(.restoreContext(item.id)) }.controlSize(.small)
+                    } else {
+                        if let audio {
+                            let playing = AudioPlayer.shared.isPlaying(audio)
+                            MapToolButton(symbol: playing ? "stop.fill" : "play.fill", help: playing ? "Stop" : "Listen") {
+                                if playing { AudioPlayer.shared.stop() } else { AudioPlayer.shared.play(audio) }
                             }
-                            .rowCard()
                         }
+                        MapToolButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open over the map") { session.open(item: item.id) }
                     }
                 }
-                .frame(maxHeight: 220)
+                if let q = item.question {
+                    Text("You asked: \(q)").font(Theme.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Text(item.body).font(Theme.caption).foregroundStyle(item.origin == .model ? Color.secondary : Color.primary).lineLimit(3)
             }
         }
+        .padding(Theme.Space.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(item.origin == .model ? style.color.opacity(0.08) : Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: Theme.radiusSmall + 2))
+        .overlay(alignment: .leading) {
+            // The model's replies carry a stripe of their colour, so they never pass for yours.
+            if item.origin == .model { UnevenRoundedRectangle(topLeadingRadius: Theme.radiusSmall + 2, bottomLeadingRadius: Theme.radiusSmall + 2).fill(style.color).frame(width: 3) }
+        }
+        .opacity(item.removed ? 0.4 : item.selected ? 1 : 0.6)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !item.removed else { return }
+            withAnimation(Theme.selection) { session.dispatch(.selectContext(item.id, !item.selected)) }
+        }
+        .contextMenu { ContextItemMenu(session: session, item: item) }
+        .animation(Theme.selection, value: item.selected)
+    }
+}
+
+/// An item's actions, in its row's menu and its overlay's.
+struct ContextItemMenu: View {
+    @Bindable var session: MapSession
+    let item: ContextItem
+
+    var body: some View {
+        if item.removed {
+            Button("Restore") { session.dispatch(.restoreContext(item.id)) }
+        } else {
+            Button("Open") { session.open(item: item.id) }
+            Button(item.selected ? "Deselect" : "Select") { session.dispatch(.selectContext(item.id, !item.selected)) }
+            if item.isPending { Button("Submit to the map") { session.submit(only: item.id) }.disabled(session.running != nil) }
+            Button("Ask me about this") { session.askMe(about: item.id) }.disabled(session.running != nil)
+            Divider()
+            Button("Select its ideas on the map") { session.overlay = nil; session.selectIdeas(of: item) }
+            Button("Forget its ideas") { session.forgetIdeas(of: item) }
+            Divider()
+            Button("Delete", role: .destructive) { session.dispatch(.removeContext(item.id)) }
+        }
+    }
+}
+
+/// A small capsule label.
+struct Pill: View {
+    let text: String
+    var tint: Color = .secondary
+    var body: some View {
+        Text(text)
+            .font(Theme.caption.weight(.medium))
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(tint.opacity(0.14), in: Capsule())
+            .foregroundStyle(tint)
     }
 }
 
@@ -107,167 +210,6 @@ extension View {
     }
 }
 
-struct VerifyList: View {
-    @Bindable var session: MapSession
-    let report: VerifyReport
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            Text(report.proposals.isEmpty ? "Everything in the text is on the map." : "\(report.proposals.count) facts the map lacks").font(Theme.label)
-            ForEach(Array(report.proposals.enumerated()), id: \.offset) { _, proposal in
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading) {
-                        Text(session.state.evidence.sentences.first { $0.s == proposal.sentence }?.sentence ?? "s\(proposal.sentence)").font(Theme.caption)
-                        Text(proposal.lines.joined(separator: "\n")).font(Theme.caption.monospaced()).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Apply") { session.applyProposal(proposal) }.font(Theme.caption)
-                }
-            }
-            ForEach(report.missingNodes, id: \.self) { name in
-                Label("\(name) is marked as from the text but the model cannot find it", systemImage: "exclamationmark.triangle").font(Theme.caption).foregroundStyle(.orange)
-            }
-        }
-    }
-}
-
-struct ClarifyPanel: View {
-    @Bindable var session: MapSession
-    @State private var answers: [Int: String] = [:]
-    @State private var speakerNames: [String: String] = [:]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            HStack {
-                Button("Ask me") { session.askMe() }.buttonStyle(.borderedProminent).disabled(session.running != nil)
-                Toggle("context only", isOn: $session.clarifyContextOnly).toggleStyle(.switch).controlSize(.small)
-            }
-            Text("Clarify runs only when you press Ask me.").font(Theme.caption).foregroundStyle(.secondary)
-            ForEach(Array(session.clarifyQuestions.enumerated()), id: \.offset) { i, q in
-                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    Text("\(q.reason) · s\(q.sentence)").font(Theme.label).foregroundStyle(.secondary)
-                    Text(sentence(q.sentence)).font(Theme.caption).foregroundStyle(.tertiary).lineLimit(2)
-                    Text(q.question).font(Theme.body)
-                    HStack {
-                        TextField("answer", text: Binding(get: { answers[i] ?? "" }, set: { answers[i] = $0 }))
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { answer(i, q) }
-                        Button("Add") { answer(i, q) }.disabled((answers[i] ?? "").isEmpty)
-                    }
-                }
-                .rowCard()
-            }
-            let labels = Set(session.state.evidence.sentences.compactMap(\.speaker)).sorted()
-            if !labels.isEmpty {
-                SectionTitle("Speakers")
-                ForEach(labels, id: \.self) { label in
-                    HStack {
-                        Text(label).frame(width: 80, alignment: .leading)
-                        TextField("name", text: Binding(get: { speakerNames[label] ?? session.state.speakers.names[label.lowercased()] ?? "" }, set: { speakerNames[label] = $0 }))
-                            .textFieldStyle(.roundedBorder)
-                        Button("Set") {
-                            if let name = speakerNames[label], !name.isEmpty { session.dispatch(.nameSpeaker(label: label, name: name)) }
-                        }
-                    }
-                }
-            }
-            SectionTitle("Add context by hand")
-            AddContextField(session: session)
-        }
-    }
-
-    private func sentence(_ n: Int) -> String {
-        session.state.evidence.sentences.last { $0.s == n }?.sentence ?? ""
-    }
-
-    private func answer(_ i: Int, _ q: ClarifyQuestion) {
-        guard let text = answers[i], !text.isEmpty else { return }
-        session.dispatch(.answer(q, text))
-        answers[i] = nil
-        session.clarifyQuestions.remove(at: i)
-    }
-}
-
-struct AddContextField: View {
-    @Bindable var session: MapSession
-    @State private var text = ""
-    var body: some View {
-        HStack {
-            TextField("who said what, the setting, anything the text assumes", text: $text).textFieldStyle(.roundedBorder).onSubmit(add)
-            Button("Add", action: add).disabled(text.isEmpty)
-        }
-    }
-    private func add() {
-        session.dispatch(.answer(nil, text))
-        text = ""
-    }
-}
-
-struct ProofPanel: View {
-    @Bindable var session: MapSession
-    @State private var player: AVAudioPlayer?
-
-    var body: some View {
-        let names = session.selection.sorted()
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if names.isEmpty, let key = session.selectedEdge {
-                Text("Edge \(key.lo.name) – \(key.hi.name)").font(Theme.label)
-                edgeDetail(key)
-            } else if names.isEmpty {
-                Text("Select a node to see the sentences it came from.").foregroundStyle(.secondary)
-            } else {
-                HStack { ForEach(names, id: \.self) { NodeChip(name: $0, graph: session.state.graph) } }
-                let entries = Proof.entries(for: names, in: session.state)
-                if entries.isEmpty {
-                    Text(names.count == 1 ? "No proof: this is not a text node." : "No proof sentences.").foregroundStyle(.secondary)
-                }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Theme.Space.s) {
-                        ForEach(entries, id: \.sentence.id) { entry in
-                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                                HStack {
-                                    Text("text \(entry.sentence.text) · s\(entry.sentence.s)").font(Theme.label).foregroundStyle(.secondary)
-                                    if let sp = entry.sentence.speaker { Text(sp).font(Theme.caption).foregroundStyle(.tertiary) }
-                                    Spacer()
-                                    if let t0 = entry.sentence.t0, let url = session.audioURL(for: entry.sentence.text) {
-                                        Button { play(url, from: t0, to: entry.sentence.t1) } label: { Image(systemName: "play.circle") }.buttonStyle(.plain)
-                                    }
-                                }
-                                Text(entry.sentence.sentence).font(Theme.body)
-                                    .onTapGesture { session.selection = Set(Proof.nodes(supportedBy: entry.sentence.id, in: session.state.graph)) }
-                                HStack { ForEach(entry.nodes, id: \.self) { NodeChip(name: $0, graph: session.state.graph) } }
-                            }
-                            .rowCard()
-                        }
-                    }
-                }
-                if names.count == 1, let node = session.state.graph.node(names[0]) {
-                    SectionTitle("Notes")
-                    ForEach(node.notes, id: \.self) { Text($0).font(Theme.caption) }
-                    ForEach(Outline.comments(attachedTo: names[0], in: session.state.graph), id: \.self) { Text($0).font(Theme.caption).italic() }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func edgeDetail(_ key: EdgeKey) -> some View {
-        if let edge = session.state.graph.edges[key] {
-            Text(edge.labels.joined(separator: ", ")).font(Theme.body)
-            ForEach(edge.notes, id: \.self) { Text($0).font(Theme.caption) }
-            ForEach(session.state.graph.comments.filter { $0.attachedTo == .edge(key) }, id: \.text) { Text($0.text).font(Theme.caption).italic() }
-        }
-    }
-
-    private func play(_ url: URL, from t0: Double, to t1: Double?) {
-        player = try? AVAudioPlayer(contentsOf: url)
-        player?.currentTime = t0
-        player?.play()
-        let length = max((t1 ?? t0 + 3) - t0, 1.5)
-        DispatchQueue.main.asyncAfter(deadline: .now() + length) { [weak player] in player?.stop() }
-    }
-}
-
 struct NodeChip: View {
     let name: String
     let graph: Graph
@@ -278,37 +220,6 @@ struct NodeChip: View {
             .padding(.horizontal, Theme.Space.s).padding(.vertical, 2)
             .background(Theme.kind(node?.note(kind: "kind")).opacity(0.15), in: Capsule())
             .overlay(Capsule().stroke(Theme.kind(node?.note(kind: "kind")), lineWidth: 1))
-    }
-}
-
-struct ChatPanel: View {
-    @Bindable var session: MapSession
-    @State private var message = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    ForEach(Array(session.chatLog.enumerated()), id: \.offset) { _, entry in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.who).font(Theme.label).foregroundStyle(.secondary)
-                            Text(entry.text).font(Theme.body).textSelection(.enabled)
-                        }
-                        .frame(maxWidth: .infinity, alignment: entry.who == "you" ? .trailing : .leading)
-                    }
-                }
-            }
-            .frame(minHeight: 200)
-            HStack {
-                TextField("Ask about the map; your message joins the context", text: $message).textFieldStyle(.roundedBorder).onSubmit(send)
-                Button("Send", action: send).disabled(message.isEmpty || session.running != nil)
-            }
-        }
-    }
-    private func send() {
-        guard !message.isEmpty else { return }
-        session.chat(message)
-        message = ""
     }
 }
 

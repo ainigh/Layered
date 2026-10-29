@@ -14,7 +14,7 @@ enum BuiltInIcons {
         ("person.crop.circle", "contact profile account avatar"),
         ("person.badge.plus", "hire hiring recruit recruitment signup onboarding join applicant candidate"),
         ("person.badge.minus", "layoff resignation"),
-        ("person.text.rectangle", "id identity passport license badge"),
+        ("person.text.rectangle", "id identity passport license"),
         ("crown", "king queen leader leadership royal ceo chief founder executive president"),
         ("briefcase", "job work business career employee employer manager boss worker professional consultant"),
         ("graduationcap", "school student education university college degree graduate study learning course class teacher professor"),

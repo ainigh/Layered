@@ -139,7 +139,9 @@ final class MapSession {
     /// Lays a graph out as GridClip draws maps, measuring text as the canvas sets it.
     func lay(_ graph: Graph) -> MapLayout {
         let icons = self.icons
-        return MapLayout.compute(graph, measure: { Theme.Map.measure($0, $1) }, glyph: { MapLayout.defaultGlyph($0) || !icons.icons(for: $0.id.name, available: SymbolLibrary.exists).isEmpty })
+        return MapLayout.compute(graph, measure: { Theme.Map.measure($0, $1) },
+                                 glyph: { MapLayout.defaultGlyph($0) || !icons.icons(for: $0.id.name, available: SymbolLibrary.exists).isEmpty },
+                                 icons: { MapSession.symbols(for: $0, icons: icons).count })
     }
 
     /// The project's icon manifest (none: an empty one), backed by every symbol a name can match.
@@ -160,15 +162,19 @@ final class MapSession {
         return Array(out.prefix(16))
     }
 
-    /// A node's icon: the one its `@icon` names (a symbol, or a word to match), else a match for
-    /// its name (the project's icons, the built-in words, the Mac's symbols), else its kind's glyph.
-    func symbol(for node: Node) -> String {
+    /// A node's icons, drawn stacked: the one its `@icon` names (a symbol, or a word to match),
+    /// else one for each word of its name that matches (the project's icons, the built-in
+    /// words, the Mac's symbols), else its kind's glyph. Never empty.
+    nonisolated static func symbols(for node: Node, icons: IconManifest) -> [String] {
         if let icon = node.note(kind: "icon") {
-            if SymbolLibrary.exists(icon) { return icon }
-            if let match = icons.icons(for: icon, available: SymbolLibrary.exists).first { return match }
+            if SymbolLibrary.exists(icon) { return [icon] }
+            if let match = icons.icons(for: icon, available: SymbolLibrary.exists).first { return [match] }
         }
-        return icons.icons(for: node.id.name, available: SymbolLibrary.exists).first ?? IconManifest.fallbackSymbol(kind: node.note(kind: "kind"))
+        let matches = icons.icons(for: node.id.name, available: SymbolLibrary.exists)
+        return matches.isEmpty ? [IconManifest.fallbackSymbol(kind: node.note(kind: "kind"))] : matches
     }
+
+    func symbols(for node: Node) -> [String] { Self.symbols(for: node, icons: icons) }
 
     func relayout() { layout = lay(state.graph) }
 

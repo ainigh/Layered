@@ -153,4 +153,28 @@ final class MapLayoutTests: XCTestCase {
         XCTAssertEqual(e.p3.x, b.x)
         XCTAssertEqual(e.p3.y, b.center.y)
     }
+
+    func testStackedIconsWidenANodeAndMoveItsEdges() throws {
+        typealias M = MapLayout.Metrics
+        XCTAssertEqual(M.iconStack(1), M.iconBox)
+        XCTAssertEqual(M.iconStack(3), M.iconBox + 2 * M.iconStep)
+        XCTAssertEqual(M.iconStack(5), M.iconBox + 2 * M.iconStep + M.moreIcons, "three shown, then “+n”")
+        XCTAssertEqual(M.glyphRoom(2), M.glyph + M.glyphStep)
+
+        let graph = try Compiler.compile("| ox - pulls | cart @src world\n| ox @src text")
+        let plain = MapLayout.compute(graph)
+        let stacked = MapLayout.compute(graph, icons: { $0.id.name == "ox" ? 3 : 2 })
+        let ox = stacked["ox"]!
+        XCTAssertEqual(plain["ox"]!.icons, 1)
+        XCTAssertEqual(ox.icons, 3)
+        XCTAssertGreaterThanOrEqual(ox.w, M.iconStack(3) + 2 * M.openPadX, "a short name: the stack sets the width")
+        XCTAssertGreaterThan(ox.w, plain["ox"]!.w)
+        XCTAssertEqual(stacked.edges[0].p0.x, ox.center.x + M.iconStack(3) / 2, accuracy: 0.5, "the edge meets the stack's side")
+        // A card shows glyphs only with a kind or an icon (or what the app's `glyph` says).
+        XCTAssertFalse(stacked["cart"]!.glyph)
+        XCTAssertEqual(stacked["cart"]!.icons, 1, "no glyph: nothing to stack")
+        let card = MapLayout.compute(graph, glyph: { _ in true }, icons: { _ in 2 })["cart"]!
+        XCTAssertEqual(card.icons, 2)
+        XCTAssertEqual(card.w, MapLayout.compute(graph, glyph: { _ in true })["cart"]!.w + M.glyphStep, accuracy: 1, "room for the second glyph")
+    }
 }

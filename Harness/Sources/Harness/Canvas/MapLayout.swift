@@ -49,9 +49,26 @@ public struct MapLayout: Equatable, Sendable {
         /// box edges meet beside it, the gap above the name, and the padding around it all.
         public static let iconLine = 30.0
         public static let iconBox = 32.0
+        /// Several icons for one name are stacked left to right, each over the one after it
+        /// and overlapping it by about 40%, so a part of each shows; past `maxIcons`, a “+n”.
+        public static let iconStep = 18.0
+        public static let maxIcons = 3
+        public static let moreIcons = 18.0
+        /// A card's small glyphs, stacked the same way.
+        public static let glyphStep = 8.0
         public static let iconGap = 2.0
         public static let openPadX = 6.0
         public static let openPadY = 4.0
+
+        /// How wide an open node's stack of `n` icons is.
+        public static func iconStack(_ n: Int) -> Double {
+            iconBox + Double(max(0, min(n, maxIcons) - 1)) * iconStep + (n > maxIcons ? moreIcons : 0)
+        }
+
+        /// The room a card's `n` glyphs take before its name.
+        public static func glyphRoom(_ n: Int) -> Double {
+            glyph + Double(max(0, min(n, maxIcons) - 1)) * glyphStep
+        }
     }
 
     /// Note kinds the canvas does not print under a name: they are drawn another way
@@ -78,6 +95,8 @@ public struct MapLayout: Equatable, Sendable {
         /// each branch can take its own colour; 0 for roots.
         public let branch: Int
         public let glyph: Bool
+        /// How many icons it shows (stacked when more than one), at least 1.
+        public let icons: Int
         public let badge: Bool
         /// Kept where `@pos` puts it (or about to be: `placing` marks what it moved).
         public internal(set) var pinned: Bool
@@ -93,7 +112,7 @@ public struct MapLayout: Equatable, Sendable {
         /// Where edges meet the node: this far down from its top, and this far in from its
         /// sides (a card's edges meet its sides at mid-height; an open node's meet its icon).
         public var anchorY: Double { boxed ? h / 2 : Metrics.openPadY + Metrics.iconLine / 2 }
-        public var anchorInset: Double { boxed ? 0 : max(0, (w - Metrics.iconBox) / 2) }
+        public var anchorInset: Double { boxed ? 0 : max(0, (w - Metrics.iconStack(icons)) / 2) }
         public func contains(_ p: Point) -> Bool { p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h }
     }
 
@@ -169,7 +188,9 @@ public struct MapLayout: Equatable, Sendable {
         node.notes.filter { NoteKind.split($0).map { !hiddenNoteKinds.contains($0.kind) } ?? !hiddenNoteKinds.contains($0) }
     }
 
-    public static func compute(_ graph: Graph, measure: Measure = estimate, glyph: (Node) -> Bool = defaultGlyph) -> MapLayout {
+    /// `icons`: how many icons a node's name matches (the app stacks them); 1 when unknown.
+    public static func compute(_ graph: Graph, measure: Measure = estimate, glyph: (Node) -> Bool = defaultGlyph,
+                               icons: (Node) -> Int = { _ in 1 }) -> MapLayout {
         typealias M = Metrics
         var layout = MapLayout()
         let ids = graph.nodes.keys.filter { $0.scope.isEmpty }
@@ -241,22 +262,23 @@ public struct MapLayout: Equatable, Sendable {
             let boxed = isBoxed(node)
             // An open node always shows its icon (the kind's glyph when nothing else matches).
             let hasGlyph = !boxed || glyph(node), hasBadge = hasBadge(node.note(kind: "src"))
+            let iconCount = hasGlyph ? max(1, icons(node)) : 0
             let pin = node.note(kind: "pos").flatMap(Position.init(noteValue:))
             let w: Double, h: Double
             if boxed {
-                let nameW = measure(shown, .name) + (hasGlyph ? M.glyph : 0) + (hasBadge ? M.badge : 0)
+                let nameW = measure(shown, .name) + (hasGlyph ? M.glyphRoom(iconCount) : 0) + (hasBadge ? M.badge : 0)
                 let textW = ([nameW] + notes.map { measure($0, .note) }).max()!
                 w = (textW + 2 * M.padX).rounded(.up)
                 h = M.nameLine + Double(notes.count) * M.noteLine + 2 * M.padY
             } else {
-                let textW = ([M.iconBox, measure(shown, .name)] + notes.map { measure($0, .note) }).max()!
+                let textW = ([M.iconStack(iconCount), measure(shown, .name)] + notes.map { measure($0, .note) }).max()!
                 w = (textW + 2 * M.openPadX).rounded(.up)
                 h = M.openPadY + M.iconLine + M.iconGap + M.nameLine + Double(notes.count) * M.noteLine + M.openPadY
             }
             sized[id] = PlacedNode(
                 id: id, name: shown, notes: notes,
                 cut: shown != id.name || notes.count < all.count || zip(notes, all).contains { $0 != $1 },
-                depth: depth[id] ?? 0, branch: branch[id] ?? 0, glyph: hasGlyph, badge: hasBadge, pinned: pin != nil, boxed: boxed,
+                depth: depth[id] ?? 0, branch: branch[id] ?? 0, glyph: hasGlyph, icons: max(1, iconCount), badge: hasBadge, pinned: pin != nil, boxed: boxed,
                 x: 0, y: 0, w: w, h: h)
         }
 

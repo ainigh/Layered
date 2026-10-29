@@ -4,21 +4,16 @@ import AppKit
 
 @main
 struct MindmapApp: App {
-    @State private var model = AppModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    private let model = AppModel.shared
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuBarMenu(model: model)
-        } label: {
-            // An update waiting shows on the icon.
-            Image(systemName: model.updater.available == nil ? "point.3.connected.trianglepath.dotted" : "arrow.down.circle")
+        // The icon and its menu are AppKit's (`StatusBarController`), and so is the window
+        // (`AppModel.showWindow`). This scene is never shown; it's here because an app needs one,
+        // and it carries the app's menus.
+        MenuBarExtra("Mindmap", systemImage: "point.3.connected.trianglepath.dotted", isInserted: .constant(false)) {
+            EmptyView()
         }
-        Window("Mindmap", id: "main") {
-            MainWindow(model: model)
-                .frame(minWidth: 900, minHeight: 600)
-        }
-        .windowResizability(.contentMinSize)
-        .defaultSize(width: 1200, height: 800)
         .commands {
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") { model.session?.dispatch(.undo) }.keyboardShortcut("z", modifiers: .command)
@@ -45,21 +40,35 @@ struct MindmapApp: App {
     }
 }
 
+/// Starts what belongs to the running app (not to previews or tests): the menu bar icon, Ollama,
+/// the updater, the capture shortcut.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated { AppModel.shared.start() }
+    }
+}
+
 /// App-wide state: the open session, the demo fallback, the window.
 @MainActor
 @Observable
 final class AppModel {
+    static let shared = AppModel()
+
     var session: MapSession?
     var openPanels: Set<Panel> = [.context]
     let updater = Updater()
     private var ollama = OllamaLauncher()
     private var shortcut: GlobalShortcut?
-    /// SwiftUI's `openWindow`, handed over by the menu (only a view can get it), so anything here
-    /// that shows the window also opens it when it's closed.
-    @ObservationIgnored var openMainWindow: (() -> Void)?
+    @ObservationIgnored private var statusBar: StatusBarController?
+    @ObservationIgnored private var window: NSWindow?
 
     init() {
         session = MapSession.demo(.typical)
+    }
+
+    /// Once the app has launched.
+    func start() {
+        statusBar = StatusBarController(model: self)
         ollama.startIfInstalled()
         Notifier.shared.start { [weak self] in self?.updater.confirmInstall() }
         updater.start()
@@ -88,12 +97,25 @@ final class AppModel {
     /// Opens the window (or brings it back) in front of other apps. A menu bar-only app can't come
     /// to the front, so while the window is open the app is a regular one, with a Dock icon.
     func showWindow() {
-        openMainWindow?()
+        let window = self.window ?? makeWindow()
+        window.title = session?.title ?? "Mindmap"
         NSApp.setActivationPolicy(.regular)
-        DispatchQueue.main.async {
-            NSApp.activate()
-            NSApp.windows.first(where: Self.isMainWindow)?.makeKeyAndOrderFront(nil)
-        }
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// The one window, kept (not released) when it's closed so it opens again as it was.
+    private func makeWindow() -> NSWindow {
+        let hosting = NSHostingController(rootView: MainWindow(model: self).frame(minWidth: 900, minHeight: 600))
+        hosting.sceneBridgingOptions = [.title, .toolbars]
+        let window = NSWindow(contentViewController: hosting)
+        window.identifier = NSUserInterfaceItemIdentifier("main")
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 1200, height: 800))
+        window.center()
+        window.setFrameAutosaveName("Mindmap.main")
+        self.window = window
+        return window
     }
 
     func open(_ url: URL) {
@@ -140,63 +162,5 @@ final class AppModel {
         if panel.runModal() == .OK, let url = panel.url, let text = try? String(contentsOf: url, encoding: .utf8) {
             if url.pathExtension == "mm" { session?.importMM(text) } else { capture(text) }
         }
-    }
-}
-
-struct MenuBarMenu: View {
-    @Bindable var model: AppModel
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        let _ = model.openMainWindow = { [openWindow] in openWindow(id: "main") }
-        Button("Open Mindmap") { model.showWindow() }
-        Divider()
-        Button("New map from clipboard") { model.newFromClipboard() }
-        Button("Open folder…") { model.openFolder() }
-        Button("Transcribe audio file…") { model.pickAudio() }
-        if !RecentMaps.all().isEmpty {
-            Menu("Recent maps") {
-                ForEach(RecentMaps.all(), id: \.self) { url in
-                    Button(url.lastPathComponent) { model.open(url) }
-                }
-            }
-        }
-        Menu("Demo") {
-            ForEach(Demo.Map.allCases, id: \.self) { map in
-                Button(map.rawValue.capitalized) { model.session = MapSession.demo(map); model.showWindow() }
-            }
-        }
-        Divider()
-        UpdateMenuItems(updater: model.updater)
-        Divider()
-        Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
-    }
-}
-
-/// What this copy is, and checking for, installing or retrying an update.
-struct UpdateMenuItems: View {
-    let updater: Updater
-
-    var body: some View {
-        if Updater.canUpdate {
-            switch updater.state {
-            case .idle, .upToDate:
-                Button(updater.state == .upToDate ? "Up to date: check again" : "Check for updates") { updater.check(userInitiated: true) }
-            case .checking:
-                Text("Checking for updates…")
-            case let .available(plan):
-                Button(plan.title + "…") { updater.confirmInstall() }
-            case let .installing(step):
-                Text(step)
-            case let .failed(message):
-                Text(message)
-                Button("Try again") { updater.check(userInitiated: true) }
-                Button("Copy error report") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(Updater.report(message), forType: .string)
-                }
-            }
-        }
-        Text(updater.versionLine)
     }
 }

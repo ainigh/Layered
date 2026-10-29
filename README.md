@@ -16,7 +16,7 @@ Harness (Linux or macOS, Swift 6.1):
 cd Harness && swift build && swift test
 ```
 
-App (macOS 14, Xcode 15 or newer):
+App (macOS 14, Xcode 15.3 or newer):
 
 ```bash
 cd App && make app        # builds Mindmap.app into App/build/

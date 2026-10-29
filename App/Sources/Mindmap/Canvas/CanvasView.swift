@@ -45,8 +45,11 @@ struct CanvasView: View {
                 }
 
                 if let hovered, let node = graph.nodes[NodeID(name: hovered)], let p = layout.positions[hovered] {
+                    let r = CGFloat(Layout.radius(degree: graph.degree(of: node.id))) * zoom
+                    let hx = center.x + CGFloat(p.x) * zoom
+                    let hy = center.y + CGFloat(p.y) * zoom - r - 48
                     HoverCard(node: node, graph: graph)
-                        .position(x: center.x + p.x * zoom, y: center.y + p.y * zoom - Layout.radius(degree: graph.degree(of: node.id)) * zoom - 48)
+                        .position(x: hx, y: hy)
                         .allowsHitTesting(false)
                 }
                 if let boxSelect {

@@ -10,7 +10,9 @@ let package = Package(
     dependencies: [
         .package(path: "../Harness"),
         // whisper.cpp ships a Swift package exposing the C API with Metal enabled.
-        .package(url: "https://github.com/ggml-org/whisper.cpp", from: "1.7.0"),
+        // Pinned by revision (v1.7.2): later tags drop the source-building Package.swift,
+        // and a versioned requirement is rejected because the target uses unsafeFlags.
+        .package(url: "https://github.com/ggml-org/whisper.cpp", revision: "6266a9f9e56a5b925e9892acf650f3eb1245814d"),
     ],
     targets: [
         .executableTarget(

@@ -82,12 +82,15 @@ enum WhisperRun {
         params.tdrz_enable = tinydiarize
         params.language = nil
         let box = ProgressBox(progress)
-        params.progress_callback_user_data = Unmanaged.passUnretained(box).toOpaque()
-        params.progress_callback = { _, _, percent, data in
-            guard let data else { return }
-            Unmanaged<ProgressBox>.fromOpaque(data).takeUnretainedValue().report(Double(percent) / 100)
+        // The box is handed to C unretained; keep it alive for the whole call.
+        let status: Int32 = withExtendedLifetime(box) {
+            params.progress_callback_user_data = Unmanaged.passUnretained(box).toOpaque()
+            params.progress_callback = { _, _, percent, data in
+                guard let data else { return }
+                Unmanaged<ProgressBox>.fromOpaque(data).takeUnretainedValue().report(Double(percent) / 100)
+            }
+            return samples.withUnsafeBufferPointer { whisper_full(ctx, params, $0.baseAddress, Int32($0.count)) }
         }
-        let status = samples.withUnsafeBufferPointer { whisper_full(ctx, params, $0.baseAddress, Int32($0.count)) }
         guard status == 0 else { throw ModelError.badResponse(Int(status), "whisper_full failed") }
 
         var segments: [Transcript.Segment] = []

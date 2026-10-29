@@ -10,7 +10,9 @@ app:
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp $(BIN) $(APP)/Contents/MacOS/Mindmap
 	cp Info.plist $(APP)/Contents/Info.plist
-	cp -R .build/release/Mindmap_Mindmap.bundle $(APP)/Contents/Resources/ 2>/dev/null || true
+	# SwiftPM's Bundle.module accessor looks beside the executable's bundle root first.
+	cp -R .build/release/Harness_Harness.bundle $(APP)/ 2>/dev/null || true
+	cp -R .build/release/Mindmap_Mindmap.bundle $(APP)/ 2>/dev/null || true
 	cp -R .build/release/Harness_Harness.bundle $(APP)/Contents/Resources/ 2>/dev/null || true
 	@echo "built $(APP)"
 

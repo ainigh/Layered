@@ -71,12 +71,12 @@ final class CanvasTests: XCTestCase {
         XCTAssertNotNil(decoded.nodes.first?.x)
         XCTAssertEqual(decoded.nodes.first { $0.name == "paper" }?.kind, "thing")
 
-        let svg = Export.svg(graph, layout: Layout.compute(graph, iterations: 10))
+        let svg = Export.svg(graph, layout: MapLayout.compute(graph))
         XCTAssertTrue(svg.hasPrefix("<svg"))
         XCTAssertTrue(svg.contains(">paper<"))
         XCTAssertTrue(svg.contains("stroke-dasharray=\"2 3\""), "guess edges are dotted")
         XCTAssertTrue(svg.contains("marker-end"))
-        XCTAssertEqual(svg.components(separatedBy: "<g ").count - 1, graph.nodes.count)
+        XCTAssertEqual(svg.components(separatedBy: "<g class=\"node\"").count - 1, graph.nodes.count)
     }
 
     func testImportMM() throws {

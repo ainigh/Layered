@@ -18,16 +18,26 @@ enum Panel: String, CaseIterable, Identifiable {
         case .history: return "clock.arrow.circlepath"
         }
     }
+
+    /// The side a panel docks to until the user moves it.
+    var defaultEdge: PanelPlacement.Edge {
+        [.context, .clarify, .chat, .outline].contains(self) ? .leading : .trailing
+    }
+
+    var defaultWidth: Double { self == .prompt || self == .settings ? 400 : 340 }
 }
 
-/// The one window: the canvas fills it, panels slide in from the edges, a thin status bar below.
+/// The one window: the map in the middle, a pane on each side that shows one panel at a
+/// time (picked from the pane's tab strip), a thin status bar below.
 struct MainWindow: View {
     @Bindable var model: AppModel
 
     var body: some View {
         if let session = model.session {
             MapWindow(session: session, model: model)
+                .id(ObjectIdentifier(session))
                 .navigationTitle(session.title)
+                .preferredColorScheme(session.settings.theme == "light" ? .light : session.settings.theme == "dark" ? .dark : nil)
         } else {
             ContentUnavailableView("No map open", systemImage: "folder", description: Text("Open a folder or a demo from the menu bar."))
         }
@@ -40,69 +50,56 @@ struct MapWindow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                CanvasView(session: session)
-                    .background(Color(nsColor: .windowBackgroundColor))
-                    .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
-                        handleDrop(providers)
-                    }
-                panelsOverlay
-                HeldBackDrawer(session: session)
+            HStack(spacing: 0) {
+                pane(.leading)
+                ZStack {
+                    CanvasView(session: session)
+                        .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
+                            handleDrop(providers)
+                        }
+                    HeldBackDrawer(session: session)
+                }
+                .frame(minWidth: 360)
+                pane(.trailing)
             }
             StatusBar(session: session, model: model)
         }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { model.togglePane(.leading, session: session) } label: { Label("Left pane", systemImage: "sidebar.left") }
+                    .help("Show or hide the left pane")
+            }
             ToolbarItemGroup(placement: .primaryAction) {
-                ForEach(Panel.allCases) { panel in
-                    Toggle(isOn: Binding(get: { model.openPanels.contains(panel) },
-                                         set: { on in withAnimation(Theme.slide) { if on { model.openPanels.insert(panel) } else { model.openPanels.remove(panel) } } })) {
-                        Label(panel.title, systemImage: panel.symbol)
+                if let running = session.running {
+                    HStack(spacing: Theme.Space.xs) {
+                        ProgressView().controlSize(.small)
+                        Text(running.rawValue.capitalized).font(Theme.caption).foregroundStyle(.secondary)
                     }
-                    .help(panel.title)
                 }
+                Button { session.selection.forEach { session.expand($0) } } label: { Label("Expand", systemImage: "sparkles") }
+                    .help("Expand the selected nodes (⌘E)")
+                    .disabled(session.selection.isEmpty || session.running != nil)
+                Button { model.togglePane(.trailing, session: session) } label: { Label("Right pane", systemImage: "sidebar.right") }
+                    .help("Show or hide the right pane")
             }
         }
         .onAppear {
             session.contextDraft = UserDefaults.standard.string(forKey: "draft:\(session.title)") ?? session.state.context.plainText
             session.submittedDraft = session.contextDraft
         }
-    }
-
-    @ViewBuilder
-    private var panelsOverlay: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: Theme.Space.s) { panels(on: .leading) }.frame(maxHeight: .infinity, alignment: .top)
-            Spacer()
-            VStack(spacing: Theme.Space.s) { panels(on: .trailing) }.frame(maxHeight: .infinity, alignment: .top)
-        }
-        .padding(Theme.Space.s)
-        .allowsHitTesting(true)
-    }
-
-    @ViewBuilder
-    private func panels(on edge: PanelPlacement.Edge) -> some View {
-        ForEach(Panel.allCases.filter { model.openPanels.contains($0) && placement($0).edge == edge }) { panel in
-            PanelContainer(title: panel.title, symbol: panel.symbol, placement: binding(for: panel), onClose: { model.openPanels.remove(panel) }) {
-                panelBody(panel)
-            }
-            .frame(width: placement(panel).width)
-            .transition(.move(edge: edge == .leading ? .leading : .trailing).combined(with: .opacity))
+        .onChange(of: session.selection) { _, selection in
+            // Selecting a node shows its proof, if the Proof panel's pane is open.
+            let edge = session.edge(for: .proof)
+            if !selection.isEmpty, model.shownPanels[edge] != nil, model.shownPanels[edge] != .proof { model.show(.proof, session: session) }
         }
     }
 
-    private func placement(_ panel: Panel) -> PanelPlacement {
-        session.ui.panels[panel.rawValue] ?? defaultPlacement(panel)
-    }
-
-    private func defaultPlacement(_ panel: Panel) -> PanelPlacement {
-        var p = PanelPlacement()
-        p.edge = [.context, .clarify, .chat, .outline].contains(panel) ? .leading : .trailing
-        p.width = panel == .prompt || panel == .settings ? 420 : 340
-        return p
-    }
-
-    private func binding(for panel: Panel) -> Binding<PanelPlacement> {
-        Binding(get: { placement(panel) }, set: { session.ui.panels[panel.rawValue] = $0; session.saveUI() })
+    @ViewBuilder
+    private func pane(_ edge: PanelPlacement.Edge) -> some View {
+        if let panel = model.shownPanels[edge] {
+            SidePane(edge: edge, panel: panel, session: session, model: model) { panelBody(panel) }
+                .transition(.move(edge: edge == .leading ? .leading : .trailing))
+        }
     }
 
     @ViewBuilder
@@ -149,7 +146,115 @@ struct MapWindow: View {
     }
 }
 
-/// The shared panel chrome: header, drag handle, body (SPEC: new panels add no new chrome).
+extension MapSession {
+    /// Where a panel sits: where the user put it, or its default side.
+    func placement(_ panel: Panel) -> PanelPlacement {
+        if let p = ui.panels[panel.rawValue] { return p }
+        var p = PanelPlacement()
+        p.edge = panel.defaultEdge
+        p.width = panel.defaultWidth
+        return p
+    }
+
+    /// The side a panel docks to (only left and right are used).
+    func edge(for panel: Panel) -> PanelPlacement.Edge {
+        placement(panel).edge == .leading ? .leading : .trailing
+    }
+
+    func setPlacement(_ panel: Panel, _ p: PanelPlacement) {
+        ui.panels[panel.rawValue] = p
+        saveUI()
+    }
+}
+
+/// One side of the window: a tab strip of the panels docked there, then the shown panel.
+/// The inner edge drags to resize; a panel's menu moves it to the other side.
+struct SidePane<Content: View>: View {
+    let edge: PanelPlacement.Edge
+    let panel: Panel
+    @Bindable var session: MapSession
+    @Bindable var model: AppModel
+    @ViewBuilder let content: () -> Content
+    @State private var dragWidth: Double?
+
+    var body: some View {
+        let placement = session.placement(panel)
+        let width = dragWidth ?? placement.width
+        HStack(spacing: 0) {
+            if edge == .trailing { resizeHandle(placement) }
+            VStack(spacing: 0) {
+                PaneTabs(edge: edge, selected: panel, session: session, model: model)
+                Divider()
+                PanelContainer(title: panel.title, symbol: panel.symbol,
+                               placement: Binding(get: { session.placement(panel) }, set: { new in
+                                   withAnimation(Theme.slide) {
+                                       session.setPlacement(panel, new)
+                                       model.panelMoved(panel, session: session)
+                                   }
+                               }),
+                               onClose: { withAnimation(Theme.slide) { model.hidePane(edge) } },
+                               content: content)
+            }
+            .frame(width: width)
+            .background(.background)
+            if edge == .leading { resizeHandle(placement) }
+        }
+    }
+
+    private func resizeHandle(_ placement: PanelPlacement) -> some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.1))
+            .frame(width: 1)
+            .overlay(Color.clear.frame(width: 7).contentShape(Rectangle()).onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            })
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    let delta = edge == .leading ? value.translation.width : -value.translation.width
+                    dragWidth = min(640, max(260, placement.width + delta))
+                }
+                .onEnded { _ in
+                    var p = placement
+                    p.width = dragWidth ?? p.width
+                    session.setPlacement(panel, p)
+                    dragWidth = nil
+                })
+    }
+}
+
+/// The icons of the panels docked on one side; the shown one is filled with the accent.
+struct PaneTabs: View {
+    let edge: PanelPlacement.Edge
+    let selected: Panel
+    @Bindable var session: MapSession
+    @Bindable var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Panel.allCases.filter { session.edge(for: $0) == edge }) { panel in
+                MapToolButton(symbol: panel.symbol, help: panel.title, pressed: panel == selected) {
+                    withAnimation(Theme.selection) { model.show(panel, session: session) }
+                }
+                .contextMenu {
+                    Button(edge == .leading ? "Move to Right Pane" : "Move to Left Pane") {
+                        var p = session.placement(panel)
+                        p.edge = edge == .leading ? .trailing : .leading
+                        withAnimation(Theme.slide) {
+                            session.setPlacement(panel, p)
+                            model.panelMoved(panel, session: session)
+                        }
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.Space.s)
+        .padding(.vertical, Theme.Space.xs + 2)
+    }
+}
+
+/// The shared panel chrome: a title row with the panel's menu, then its body (SPEC: new
+/// panels add no new chrome).
 struct PanelContainer<Content: View>: View {
     let title: String
     let symbol: String
@@ -158,80 +263,95 @@ struct PanelContainer<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: symbol).foregroundStyle(Theme.accent)
-                Text(title).font(Theme.label)
+                Text(title).font(Theme.title)
                 Spacer()
-                Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(.tertiary)
-                    .help("Drag to the other edge")
-                    .gesture(DragGesture(minimumDistance: 40).onEnded { value in
-                        withAnimation(Theme.slide) { placement.edge = value.translation.width > 0 ? .trailing : .leading }
-                    })
-                Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                Menu {
+                    Button(placement.edge == .leading ? "Move to Right Pane" : "Move to Left Pane") {
+                        placement.edge = placement.edge == .leading ? .trailing : .leading
+                    }
+                    Button("Close Pane", action: onClose)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                .help("Panel options")
             }
             .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Space.s)
-            Divider()
+            .padding(.top, Theme.Space.m)
+            .padding(.bottom, Theme.Space.s)
             content()
-                .padding(Theme.Space.m)
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.bottom, Theme.Space.m)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(maxHeight: 640, alignment: .top)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
-        .overlay(RoundedRectangle(cornerRadius: Theme.radiusLarge).strokeBorder(.quaternary))
-        .shadow(radius: 8, y: 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
-/// The “what was held back” drawer on the status bar.
+/// The “what was held back” pill and drawer, in the map's bottom left corner.
 struct HeldBackDrawer: View {
     @Bindable var session: MapSession
     @State private var open = false
 
     var body: some View {
-        VStack {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Spacer()
             if open, !session.state.heldBack.isEmpty {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    VStack(alignment: .leading, spacing: Theme.Space.m) {
                         ForEach(Array(session.state.heldBack.enumerated()), id: \.offset) { _, event in
                             VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                                HStack {
-                                    Text(event.kind.rawValue).font(Theme.label).foregroundStyle(event.kind == .dropped ? Color.red : Color.secondary)
-                                    Text(event.raw).font(Theme.caption.monospaced()).lineLimit(1)
+                                HStack(spacing: Theme.Space.xs) {
+                                    Text(event.kind.rawValue)
+                                        .font(Theme.caption.weight(.semibold))
+                                        .padding(.horizontal, 6).padding(.vertical, 1)
+                                        .background((event.kind == .dropped ? Color.red : Color.secondary).opacity(0.15), in: Capsule())
+                                        .foregroundStyle(event.kind == .dropped ? Color.red : Color.secondary)
+                                    Text(event.raw).font(Theme.caption.monospaced()).lineLimit(1).truncationMode(.middle)
                                 }
                                 Text(event.reason).font(Theme.caption).foregroundStyle(.secondary)
                                 if !event.result.isEmpty {
                                     Text(event.result.joined(separator: "\n")).font(Theme.caption.monospaced()).foregroundStyle(.tertiary)
                                 }
                                 if event.kind == .deferred {
-                                    Button("Apply") { session.dispatch(.applyLines(event.result, what: "suggestion")) }.font(Theme.caption)
+                                    Button("Apply") { session.dispatch(.applyLines(event.result, what: "suggestion")) }.controlSize(.small)
                                 }
                             }
                         }
                     }
                     .padding(Theme.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 220)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
-                .padding(Theme.Space.s)
+                .frame(width: 420)
+                .frame(maxHeight: 240)
+                .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            HStack {
-                Spacer()
-                if !session.state.heldBack.isEmpty {
-                    Button {
-                        withAnimation(Theme.slide) { open.toggle() }
-                    } label: {
-                        Label("\(session.state.heldBack.count) held back", systemImage: open ? "chevron.down" : "chevron.up")
-                            .font(Theme.caption)
+            if !session.state.heldBack.isEmpty {
+                Button {
+                    withAnimation(Theme.slide) { open.toggle() }
+                } label: {
+                    HStack(spacing: Theme.Space.xs) {
+                        Image(systemName: "tray.full")
+                        Text("\(session.state.heldBack.count) held back")
+                        Image(systemName: open ? "chevron.down" : "chevron.up").font(.system(size: 9, weight: .bold))
                     }
-                    .buttonStyle(.bordered)
-                    .padding(Theme.Space.s)
+                    .font(Theme.label)
+                    .padding(.horizontal, Theme.Space.m - 4)
+                    .frame(height: 30)
+                    .floatingBar(in: Capsule())
                 }
+                .buttonStyle(.plain)
+                .help("Lines the gate changed or kept back")
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .padding(Theme.Space.m)
     }
 }
 
@@ -242,39 +362,59 @@ struct StatusBar: View {
     var body: some View {
         HStack(spacing: Theme.Space.m) {
             Label(session.title, systemImage: session.isDemo ? "play.rectangle" : "folder").lineLimit(1)
-            Label(session.settings.model.model ?? "no model", systemImage: "cpu")
+            Label(session.settings.model.model ?? "no model", systemImage: "cpu").lineLimit(1)
             if let run = session.state.lastRun, let p = run.promptTokens {
-                Text("\(p)+\(run.responseTokens ?? 0) tokens").foregroundStyle(.secondary)
+                Text("\(p) + \(run.responseTokens ?? 0) tokens")
             }
-            let c = session.coverage
-            Label("\(c.unsupportedNodes.count)", systemImage: "circle.dashed").help("nodes with no sentence support")
-            Label("\(c.uncoveredSentences.count)", systemImage: "text.badge.xmark").help("sentences with no node")
-            Spacer()
+            let graph = session.state.graph
+            Text("\(graph.nodes.count) ideas · \(graph.edges.count) links")
+            Spacer(minLength: Theme.Space.s)
             if !session.pendingWrites.isEmpty {
-                Button { session.retryPendingWrites() } label: { Label("Folder unreachable; \(session.pendingWrites.count) lines kept in memory", systemImage: "exclamationmark.triangle") }
+                Button { session.retryPendingWrites() } label: { Label("Folder unreachable: \(session.pendingWrites.count) lines kept in memory · Retry", systemImage: "exclamationmark.triangle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.orange)
             }
             if let error = session.lastError {
                 HStack(spacing: Theme.Space.xs) {
-                    Text(error.raw).font(Theme.caption.monospaced()).lineLimit(1).foregroundStyle(.red)
-                    Text(error.message).font(Theme.caption)
-                    if let retry = error.retry { Button("Retry", action: retry).font(Theme.caption) }
+                    Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.red)
+                    Text(error.message)
+                    Text(error.raw).font(Theme.caption.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary).frame(maxWidth: 260)
+                    if let retry = error.retry { Button("Retry", action: retry).controlSize(.small) }
                 }
             }
             if let running = session.running {
-                ProgressView().controlSize(.small)
-                Text("\(running.rawValue) · ~\(session.runningTokens) tokens").font(Theme.caption)
-                if let cancel = session.cancelRun { Button("Cancel", action: cancel).font(Theme.caption) }
+                HStack(spacing: Theme.Space.xs) {
+                    ProgressView().controlSize(.mini)
+                    Text("\(running.rawValue.capitalized) · ~\(session.runningTokens) tokens")
+                    if let cancel = session.cancelRun { Button("Cancel", action: cancel).controlSize(.small) }
+                }
             }
             if let p = session.transcribing {
-                ProgressView(value: p).frame(width: 80)
-                Text("transcribing").font(Theme.caption)
+                HStack(spacing: Theme.Space.xs) {
+                    ProgressView(value: p).frame(width: 64).controlSize(.mini)
+                    Text("Transcribing")
+                }
             }
-            Label("local only", systemImage: "lock.shield").foregroundStyle(.green)
+            let c = session.coverage
+            Label("\(c.unsupportedNodes.count)", systemImage: "circle.dashed").help("Ideas no sentence supports")
+            Label("\(c.uncoveredSentences.count)", systemImage: "text.badge.xmark").help("Sentences with no idea on the map")
+            Label("Local only", systemImage: "lock.fill").foregroundStyle(.green).help("Nothing leaves this Mac")
         }
+        .labelStyle(StatusLabelStyle())
         .font(Theme.caption)
+        .foregroundStyle(.secondary)
         .padding(.horizontal, Theme.Space.m)
-        .padding(.vertical, Theme.Space.xs)
+        .frame(height: 26)
         .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// Icon and title close together, the icon a step quieter.
+struct StatusLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon.imageScale(.small).opacity(0.8)
+            configuration.title
+        }
     }
 }

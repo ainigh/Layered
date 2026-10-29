@@ -55,7 +55,10 @@ final class AppModel {
     static let shared = AppModel()
 
     var session: MapSession?
-    var openPanels: Set<Panel> = [.context]
+    /// The panel each side pane shows; a side with none is closed.
+    var shownPanels: [PanelPlacement.Edge: Panel] = [.leading: .context]
+    /// What a closed pane showed last, so opening it again brings that back.
+    @ObservationIgnored private var lastShown: [PanelPlacement.Edge: Panel] = [.leading: .context, .trailing: .proof]
     let updater = Updater()
     private var ollama = OllamaLauncher()
     private var shortcut: GlobalShortcut?
@@ -90,8 +93,39 @@ final class AppModel {
         guard let session else { return }
         session.contextDraft += (session.contextDraft.isEmpty ? "" : "\n\n") + text
         session.saveDraft()
-        openPanels.insert(.context)
+        show(.context, session: session)
         showWindow()
+    }
+
+    /// Opens `panel` in the pane on its side.
+    func show(_ panel: Panel, session: MapSession) {
+        let edge = session.edge(for: panel)
+        shownPanels[edge] = panel
+        lastShown[edge] = panel
+    }
+
+    func hidePane(_ edge: PanelPlacement.Edge) {
+        shownPanels[edge] = nil
+    }
+
+    func togglePane(_ edge: PanelPlacement.Edge, session: MapSession) {
+        withAnimation(Theme.slide) {
+            if shownPanels[edge] != nil {
+                shownPanels[edge] = nil
+            } else {
+                let docked = Panel.allCases.filter { session.edge(for: $0) == edge }
+                shownPanels[edge] = lastShown[edge].flatMap { docked.contains($0) ? $0 : nil } ?? docked.first
+            }
+        }
+    }
+
+    /// A panel moved to the other side: the side it left shows another of its panels, and
+    /// the panel opens where it went.
+    func panelMoved(_ panel: Panel, session: MapSession) {
+        for (edge, shown) in shownPanels where shown == panel && session.edge(for: panel) != edge {
+            shownPanels[edge] = Panel.allCases.first { $0 != panel && session.edge(for: $0) == edge }
+        }
+        show(panel, session: session)
     }
 
     /// Opens the window (or brings it back) in front of other apps. A menu bar-only app can't come
@@ -145,7 +179,10 @@ final class AppModel {
     func pickAudio() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.audio]
-        if panel.runModal() == .OK, let url = panel.url { session?.dropAudio(url); openPanels.insert(.context) }
+        if panel.runModal() == .OK, let url = panel.url, let session {
+            session.dropAudio(url)
+            show(.context, session: session)
+        }
     }
 
     func export(_ format: MapSession.ExportFormat) {

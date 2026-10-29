@@ -148,20 +148,20 @@ The app runs as a menu bar item. Clicking the icon opens or focuses one main win
 **Canvas**
 
 - Infinite pan and zoom (wheel, pinch, drag on empty space), rendered in SVG for up to \~500 nodes and switched to Canvas 2D above that.
-- Layout is force-directed over the whole map, with outline headings as soft clusters; a dragged node gets an `@pos` note and is pinned until “release”.
-- Edge labels sit on the edge midpoint; undirected edges have no arrowhead; two-way edges have both.
-- Headings from the outline draw as translucent regions around their nodes; collapsing a heading folds its nodes into one pill.
+- Layout draws the map as GridClip does: left-to-right trees of rounded cards, roots being the nodes nothing points at (the best-connected first, larger trees above smaller ones), with a breadth-first walk hanging every other node under the first node that reaches it. Edges the trees do not use (cycles, second parents) are dashed cross-links. Each first-level branch takes its own colour for its links and outlines; roots are filled. A faint dot grid travels with the map; hovering a node keeps its links and neighbours and dims the rest. The map fits the view when it opens and refits as it grows until the user moves or zooms it; a small bar in the bottom right zooms in, out and fits. A dragged node gets an `@pos` note (its centre) and is pinned until “release”.
+- Edge labels sit on the curve’s midpoint, on a chip of the map’s background; undirected edges have no arrowhead; two-way edges have both.
+- Headings from the outline are shown in the Outline panel (on the canvas they would split each tree, since headings group nodes by kind rather than by topic).
 - New lines from the model animate in and are highlighted for a few seconds so the user sees what changed.
 
 **Node rendering**
 
 | Property | Driven by |
 | --- | --- |
-| Shape | `@kind`: person rounded, place hexagon, thing rectangle, action pill, event diamond, idea cloud |
+| Shape | a rounded card sized to its text; `@kind` sets the glyph before the name (person, place, thing, action, event, idea) |
 | Border and fill | `@src`: text solid, world dashed and muted, guess dotted and faded, advice double border with warm tint, user solid with pencil badge |
 | Icon | name tokens matched against the icon set, or `@icon` |
-| Size | degree (number of edges), within a small range |
-| Chips | `date`, `todo`, `ref` notes as small tags under the name; a small count of proof sentences on `text` nodes |
+| Size | its name and notes (names past 240 pt are cut with an ellipsis; the hover card has the whole text) |
+| Notes | up to three notes under the name (`date`, `todo`, `ref`…), the kind set quieter than the value; provenance, kind, position and proof are drawn another way |
 
 **Icons.** The icon set is a folder of SVGs with a `manifest.json` mapping keywords and synonyms to files (`dog: [dog, puppy, hound]`). Name tokens are matched after singularising; every match yields an icon. One match fills the node badge. Two or three are stacked with a 40% overlap, the first on top; more than three show the first three and a “+n”. No match falls back to the `@kind` glyph, and the Settings panel lets the user add their own SVGs to the folder.
 
@@ -173,7 +173,7 @@ The app runs as a menu bar item. Clicking the icon opens or focuses one main win
 - Drag from a node’s edge handle to another node: create an edge; type the label inline.
 - Clicking a sentence in the Proof panel highlights every node it supports on the canvas.
 
-**Panels.** All panels slide in from an edge, can be dragged to any edge or floated, and remember their position in the `_ui` scope.
+**Panels.** The window has a pane on each side of the map; each shows one panel at a time, picked from the pane’s tab strip. A panel can move to the other pane (its menu, or right-click its tab), a pane’s inner edge drags to resize it, and both are remembered in `ui.json`. The toolbar shows and hides each pane.
 
 | Panel | Contents |
 | --- | --- |
@@ -305,7 +305,7 @@ The app should look considered without a design team, and every change should be
 | Notation (parse, compile, canonical, edits) | golden tests: `.mm` in, canonical `.mm` out; the spec’s example is the first case | every commit, under 1 s |
 | Gate and canonicaliser | table-driven: model line in, kept / rewritten / dropped out, with reason | every commit |
 | Model calls | recorded responses per prompt and model, replayed from fixtures; live Ollama only in a nightly job | every commit (replay), nightly (live) |
-| Layout | deterministic: same graph and seed give the same positions | every commit |
+| Layout | deterministic: same graph gives the same trees, columns and routes | every commit |
 | Views | snapshot tests of each panel and of the canvas against fixture maps, light and dark, two window sizes | every commit, no simulator interaction |
 | End-to-end UI | 3 to 5 smoke flows (open folder, submit, expand, undo, drop audio) with `XCUITest` | before a release only |
 

@@ -8,3 +8,4 @@ typealias Path = SwiftUI.Path
 typealias Layout = Harness.Layout
 typealias Settings = Harness.Settings
 typealias Transition = Harness.Transition
+typealias Edge = Harness.Edge

@@ -9,9 +9,16 @@ cd "$(dirname "$0")/../App"
 
 BIN=build/Mindmap.app/Contents/MacOS/Mindmap
 [[ -x "$BIN" ]] || { echo "no $BIN: run scripts/build-app.sh first" >&2; exit 1; }
-"$BIN" > build/smoke.log 2>&1 &
-pid=$!
+# Opened the way a person opens it (Launch Services, as the Finder and install.sh do), not run
+# from the shell: an app started either way can behave differently.
+open -n --stdout build/smoke.log --stderr build/smoke.log build/Mindmap.app
 sleep 15
+pid="$(pgrep -nf "$PWD/$BIN" || true)"
+if [[ -z "$pid" ]]; then
+  echo "❌ the app quit within 15 seconds of opening. Its output:"
+  cat build/smoke.log
+  exit 1
+fi
 
 if ! kill -0 "$pid" 2>/dev/null; then
   echo "❌ the app quit within 15 seconds of opening. Its output:"

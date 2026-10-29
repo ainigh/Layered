@@ -25,6 +25,8 @@ final class MapSession {
     var highlighted: [String: Date] = [:]
     var running: PromptKind?
     var runningTokens = 0
+    /// When the running request started, so the map can say how long it has been going.
+    var runningSince: Date?
     var cancelRun: (() -> Void)?
     var lastError: (raw: String, message: String, retry: (() -> Void)?)?
     var pendingWrites: [String] = []
@@ -299,6 +301,7 @@ final class MapSession {
     func run(_ kind: PromptKind, item: String, textID: Int? = nil, about: String, contextOnly: Bool = false, texts: [Int]? = nil) async -> ModelRun? {
         running = kind
         runningTokens = 0
+        runningSince = Date()
         lastError = nil
         let task = Task { [runner, state] in
             try await runner.run(kind, state: state, item: item, textID: textID, aliases: state.aliases, contextOnly: contextOnly, texts: texts) { [weak self] event in
@@ -309,7 +312,7 @@ final class MapSession {
             }
         }
         cancelRun = { task.cancel() }
-        defer { running = nil; cancelRun = nil }
+        defer { running = nil; runningSince = nil; cancelRun = nil }
         do {
             let run = try await task.value
             switch kind {
@@ -375,8 +378,19 @@ final class MapSession {
 
     private func runVerify() async -> ModelRun? {
         running = .verify
-        defer { running = nil }
-        return try? await runner.run(.verify, state: state, item: "", aliases: state.aliases)
+        runningSince = Date()
+        let task = Task { [runner, state] in try await runner.run(.verify, state: state, item: "", aliases: state.aliases) }
+        cancelRun = { task.cancel() }
+        defer { running = nil; runningSince = nil; cancelRun = nil }
+        return try? await task.value
+    }
+
+    /// Stops the request the model is working on: what it sent so far is dropped, and a
+    /// sentence walk pauses where it was.
+    func stop() {
+        cancelRun?()
+        cancelRun = nil
+        sentenceWalk?.paused = true
     }
 
     func applyProposal(_ proposal: VerifyReport.Proposal) {

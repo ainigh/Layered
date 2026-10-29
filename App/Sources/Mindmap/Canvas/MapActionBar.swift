@@ -24,8 +24,12 @@ struct MapActionBar: View {
                     .font(Theme.body)
                     .frame(minWidth: 160, idealWidth: 300, maxWidth: 340)
                     .onSubmit { send(busy: busy) }
-                MapToolButton(symbol: "paperplane.fill", help: "Send (↩)") { send(busy: busy) }
-                    .disabled(message.trimmingCharacters(in: .whitespaces).isEmpty || busy)
+                if session.running != nil {
+                    MapToolButton(symbol: "stop.fill", help: "Stop the model (⌘.)") { session.stop() }
+                } else {
+                    MapToolButton(symbol: "paperplane.fill", help: "Send (↩)") { send(busy: busy) }
+                        .disabled(message.trimmingCharacters(in: .whitespaces).isEmpty || busy)
+                }
                 Menu {
                     Toggle("Submit one sentence at a time", isOn: $session.sentenceMode)
                     Toggle("Ask me reads the context only", isOn: $session.clarifyContextOnly)
@@ -43,6 +47,9 @@ struct MapActionBar: View {
             .padding(.trailing, Theme.Space.xs)
             .padding(.vertical, 4)
             .floatingBar(in: Capsule())
+            if let running = session.running {
+                RunProgress(session: session, kind: running)
+            }
             if let walk = session.sentenceWalk {
                 WalkProgress(session: session, walk: walk)
             }
@@ -77,6 +84,30 @@ struct MapActionBar: View {
         guard !busy, !message.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         session.ask(message)
         message = ""
+    }
+}
+
+/// What the model is working on, for how long, and a way to stop it when it takes too long.
+struct RunProgress: View {
+    @Bindable var session: MapSession
+    let kind: PromptKind
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            ProgressView().controlSize(.small)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let seconds = session.runningSince.map { max(0, Int(context.date.timeIntervalSince($0))) } ?? 0
+                Text("\(kind.rawValue.capitalized) · \(seconds / 60):\(String(format: "%02d", seconds % 60)) · ~\(session.runningTokens) tokens")
+                    .font(Theme.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Button { session.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                .controlSize(.small)
+                .keyboardShortcut(".", modifiers: .command)
+                .disabled(session.cancelRun == nil)
+                .help("Stop the model; what it sent so far is dropped (⌘.)")
+        }
+        .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.xs).padding(.vertical, Theme.Space.xs)
+        .floatingBar(in: Capsule())
     }
 }
 

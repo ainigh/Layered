@@ -76,7 +76,8 @@ public struct MapLayout: Equatable, Sendable {
         public let branch: Int
         public let glyph: Bool
         public let badge: Bool
-        public let pinned: Bool
+        /// Kept where `@pos` puts it (or about to be: `placing` marks what it moved).
+        public internal(set) var pinned: Bool
         /// A card (the model's extras) or open (icon above name).
         public let boxed: Bool
         /// Top-left corner and size.
@@ -326,15 +327,34 @@ public struct MapLayout: Equatable, Sendable {
         var next = self
         next.nodes[i].x += dx
         next.nodes[i].y += dy
-        for (j, e) in next.edges.enumerated() where e.key.lo.name == name || e.key.hi.name == name {
-            guard let dir = directions[e.key], let a = next[dir.a], let b = next[dir.a == e.key.lo.name ? e.key.hi.name : e.key.lo.name] else { continue }
+        next.reroute { $0.lo.name == name || $0.hi.name == name }
+        next.fitBounds(measure: Self.estimate)
+        return next
+    }
+
+    /// The layout with nodes moved to these centres (pinned there) and every edge re-routed:
+    /// what the canvas shows while Fill the view rearranges the map.
+    public func placing(_ centers: [String: Point]) -> MapLayout {
+        var next = self
+        for (name, c) in centers {
+            guard let i = index[name] else { continue }
+            next.nodes[i].x = c.x - next.nodes[i].w / 2
+            next.nodes[i].y = c.y - next.nodes[i].h / 2
+            next.nodes[i].pinned = true
+        }
+        next.reroute { _ in true }
+        next.fitBounds(measure: Self.estimate)
+        return next
+    }
+
+    private mutating func reroute(_ touches: (EdgeKey) -> Bool) {
+        for (j, e) in edges.enumerated() where touches(e.key) {
+            guard let dir = directions[e.key], let a = self[dir.a], let b = self[dir.a == e.key.lo.name ? e.key.hi.name : e.key.lo.name] else { continue }
             var edge = Edge(a: a.id, b: b.id)
             edge.forward = dir.forward
             edge.backward = dir.backward
-            Self.route(&next.edges[j], edge, a, b)
+            Self.route(&edges[j], edge, a, b)
         }
-        next.fitBounds(measure: Self.estimate)
-        return next
     }
 
     /// Each node's centre, as the JSON export lists positions.
@@ -373,12 +393,23 @@ public struct MapLayout: Equatable, Sendable {
 
     /// A cubic from one node's side to the other's, with the label at its middle.
     static func route(_ placed: inout PlacedEdge, _ edge: Edge, _ a: PlacedNode, _ b: PlacedNode) {
-        // Left to right where the nodes allow it; otherwise bulge out to the right.
+        // Left to right where the nodes allow it; top to bottom between two placed nodes
+        // stacked one over the other; otherwise bulge out to the right.
         let (s, t) = a.x <= b.x ? (a, b) : (b, a)
         let sy = s.y + s.anchorY, ty = t.y + t.anchorY
         let sRight = s.x + s.w - s.anchorInset, tLeft = t.x + t.anchorInset, tRight = t.x + t.w - t.anchorInset
+        let (u, d) = a.y <= b.y ? (a, b) : (b, a)
         let p0: Point, p1: Point, p2: Point, p3: Point
-        if sRight < tLeft {
+        // The node the curve leaves from.
+        var start = s
+        if sRight >= tLeft, a.pinned, b.pinned, u.y + u.h + Metrics.siblingGap < d.y {
+            start = u
+            p0 = Point(x: u.x + u.w / 2, y: u.y + u.h)
+            p3 = Point(x: d.x + d.w / 2, y: d.y)
+            let dy = (p3.y - p0.y) / 2
+            p1 = Point(x: p0.x, y: p0.y + dy)
+            p2 = Point(x: p3.x, y: p3.y - dy)
+        } else if sRight < tLeft {
             p0 = Point(x: sRight, y: sy)
             p3 = Point(x: tLeft, y: ty)
             let dx = (p3.x - p0.x) / 2
@@ -394,7 +425,7 @@ public struct MapLayout: Equatable, Sendable {
         }
         placed.p0 = p0; placed.p1 = p1; placed.p2 = p2; placed.p3 = p3
         placed.labelAt = Point(x: ((p0.x + 3 * p1.x + 3 * p2.x + p3.x) / 8).rounded(), y: ((p0.y + 3 * p1.y + 3 * p2.y + p3.y) / 8).rounded())
-        let fromA = s.id == a.id
+        let fromA = start.id == a.id
         placed.arrowEnd = fromA ? edge.forward : edge.backward
         placed.arrowStart = fromA ? edge.backward : edge.forward
     }

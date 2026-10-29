@@ -78,6 +78,9 @@ struct MapWindow: View {
                         ProgressView().controlSize(.small)
                         Text(running.rawValue.capitalized).font(Theme.caption).foregroundStyle(.secondary)
                     }
+                    Button { session.stop() } label: { Label("Stop", systemImage: "stop.circle") }
+                        .help("Stop the model (⌘.)")
+                        .disabled(session.cancelRun == nil)
                 }
                 Button { session.selection.forEach { session.expand($0) } } label: { Label("Expand", systemImage: "sparkles") }
                     .help("Expand the selected nodes (⌘E)")
@@ -302,7 +305,7 @@ struct StatusBar: View {
                 HStack(spacing: Theme.Space.xs) {
                     ProgressView().controlSize(.mini)
                     Text("\(running.rawValue.capitalized) · ~\(session.runningTokens) tokens")
-                    if let cancel = session.cancelRun { Button("Cancel", action: cancel).controlSize(.small) }
+                    if session.cancelRun != nil { Button("Stop") { session.stop() }.controlSize(.small) }
                 }
             }
             if let p = session.transcribing {

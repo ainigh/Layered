@@ -166,6 +166,28 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(acc.flush(), [])
     }
 
+    func testStoppingARunThatHangsThrowsAndAppliesNothing() async throws {
+        // Sends one line, then never finishes, like a model that is taking too long.
+        struct Hanging: ModelClient {
+            func generate(_ request: ModelRequest) -> AsyncThrowingStream<ModelChunk, Error> {
+                AsyncThrowingStream { $0.yield(ModelChunk(text: "| sam @kind person @s 1\n")) }
+            }
+            func models() async throws -> [ModelInfo] { [] }
+        }
+        let r = ModelRunner(client: Hanging(), settings: ModelSettings(model: "m"))
+        let box = EventBox()
+        let task = Task { [state = state(), text] in try await r.run(.extract, state: state, item: text, textID: 1) { box.append($0) } }
+        while box.events.isEmpty { await Task.yield() }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("a stopped run returns nothing")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        XCTAssertFalse(box.events.contains(.done))
+    }
+
     func testNoModelConfiguredIsAnError() async {
         let r = ModelRunner(client: FixtureClient(recordings: []), settings: ModelSettings())
         do {

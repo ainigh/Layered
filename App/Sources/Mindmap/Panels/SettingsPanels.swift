@@ -54,29 +54,44 @@ struct SettingsPanel: View {
     @Bindable var session: MapSession
     @State private var models: [ModelInfo] = []
     @State private var connection: String?
+    @State private var reachable = true
     @State private var memory = Int64(ProcessInfo.processInfo.physicalMemory)
 
     var body: some View {
         Form {
             Section("Ollama") {
-                TextField("Host", text: $session.settings.model.host).onSubmit(save)
+                TextField("Host", text: $session.settings.model.host).onSubmit { save(); Task { await loadModels() } }
                 HStack {
                     Picker("Model", selection: Binding(get: { session.settings.model.model ?? "" }, set: { session.settings.model.model = $0.isEmpty ? nil : $0; save() })) {
                         Text("none").tag("")
+                        if session.isDemo { Text("demo (recorded answers)").tag(MapSession.demoModel) }
                         ForEach(models, id: \.name) { m in
-                            Text("\(m.name)\(m.fits(inMemory: memory) ? "" : " (does not fit)")").tag(m.name)
+                            Text("\(m.name)\(m.parameterSize.map { " · \($0)" } ?? "")\(m.fits(inMemory: memory) ? "" : " (does not fit)")").tag(m.name)
+                        }
+                        // A model picked before but not installed now still shows, so the picker has a match.
+                        if let current = session.settings.model.model, current != MapSession.demoModel, !models.contains(where: { $0.name == current }) {
+                            Text("\(current) (not installed)").tag(current)
                         }
                     }
                     Button("Refresh") { Task { await loadModels() } }
+                }
+                if let connection {
+                    Text(connection).font(Theme.caption).foregroundStyle(reachable ? Color.secondary : Color.orange)
+                }
+                if !reachable {
+                    Button("Start Ollama") {
+                        AppModel.shared.startOllama(host: session.ollama.host)
+                        Task { try? await Task.sleep(for: .seconds(2)); await loadModels() }
+                    }
+                }
+                if session.usesRecordings {
+                    Text("This demo answers from recordings. Pick an installed model to use Ollama instead.").font(Theme.caption).foregroundStyle(.secondary)
                 }
                 Slider(value: $session.settings.model.temperature, in: 0...1, step: 0.05) { Text("Temperature \(session.settings.model.temperature, specifier: "%.2f")") }
                     .onChange(of: session.settings.model.temperature) { _, _ in save() }
                 TextField("Context size", value: $session.settings.model.contextSize, format: .number).onSubmit(save)
                 Toggle("Send GBNF grammar (falls back if rejected)", isOn: $session.settings.model.useGrammar).onChange(of: session.settings.model.useGrammar) { _, _ in save() }
-                HStack {
-                    Button("Test connection") { Task { await test() } }
-                    if let connection { Text(connection).font(Theme.caption).foregroundStyle(.secondary) }
-                }
+                Button("Test connection") { Task { await loadModels() } }
             }
             Section("Transcription") {
                 TextField("whisper model", text: $session.settings.whisperModel).onSubmit(save)
@@ -103,21 +118,22 @@ struct SettingsPanel: View {
 
     private func save() { session.saveSettings() }
 
+    /// Asks Ollama (always Ollama, even in a demo) what is installed.
     private func loadModels() async {
-        models = (try? await session.runnerClient.models()) ?? []
+        let host = session.settings.model.host
+        do {
+            models = try await session.ollama.models()
+            reachable = true
+            connection = models.isEmpty ? "Connected, but no models are installed: run `ollama pull <model>`." : "Connected to \(host) · \(models.count) models"
+        } catch {
+            models = []
+            reachable = false
+            connection = "Ollama is not answering at \(host). Is it running?"
+            return
+        }
         if session.settings.model.model == nil, let best = ModelInfo.defaultModel(from: models, memory: memory) {
             session.settings.model.model = best.name
             save()
-        }
-    }
-
-    private func test() async {
-        do {
-            let list = try await session.runnerClient.models()
-            connection = "connected · \(list.count) models"
-            models = list
-        } catch {
-            connection = "not reachable: \(error)"
         }
     }
 }

@@ -54,7 +54,7 @@ struct MapWindow: View {
                         .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
                             handleDrop(providers)
                         }
-                    HeldBackDrawer(session: session)
+                    NotationDrawer(session: session)
                     MapActionBar(session: session)
                     if let overlay = session.overlay {
                         MapOverlay(session: session, overlay: overlay)
@@ -124,9 +124,9 @@ struct MapWindow: View {
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
                     guard let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
                     Task { @MainActor in
-                        if ["m4a", "mp3", "wav", "aiff", "caf"].contains(url.pathExtension.lowercased()) {
+                        if AudioOverlay.kinds.contains(url.pathExtension.lowercased()) {
                             session.dropAudio(url)
-                            model.show(.context, session: session)
+                            session.overlay = .audio
                         } else if url.pathExtension == "mm", let text = try? String(contentsOf: url, encoding: .utf8) {
                             session.importMM(text)
                         } else if let text = try? String(contentsOf: url, encoding: .utf8) {
@@ -269,68 +269,6 @@ struct PanelContainer<Content: View>: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-}
-
-/// The “what was held back” pill and drawer, in the map's bottom left corner.
-struct HeldBackDrawer: View {
-    @Bindable var session: MapSession
-    @State private var open = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Spacer()
-            if open, !session.state.heldBack.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Theme.Space.m) {
-                        ForEach(Array(session.state.heldBack.enumerated()), id: \.offset) { _, event in
-                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                                HStack(spacing: Theme.Space.xs) {
-                                    Text(event.kind.rawValue)
-                                        .font(Theme.caption.weight(.semibold))
-                                        .padding(.horizontal, 6).padding(.vertical, 1)
-                                        .background((event.kind == .dropped ? Color.red : Color.secondary).opacity(0.15), in: Capsule())
-                                        .foregroundStyle(event.kind == .dropped ? Color.red : Color.secondary)
-                                    Text(event.raw).font(Theme.caption.monospaced()).lineLimit(1).truncationMode(.middle)
-                                }
-                                Text(event.reason).font(Theme.caption).foregroundStyle(.secondary)
-                                if !event.result.isEmpty {
-                                    Text(event.result.joined(separator: "\n")).font(Theme.caption.monospaced()).foregroundStyle(.tertiary)
-                                }
-                                if event.kind == .deferred {
-                                    Button("Apply") { session.dispatch(.applyLines(event.result, what: "suggestion")) }.controlSize(.small)
-                                }
-                            }
-                        }
-                    }
-                    .padding(Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(width: 420)
-                .frame(maxHeight: 240)
-                .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            if !session.state.heldBack.isEmpty {
-                Button {
-                    withAnimation(Theme.slide) { open.toggle() }
-                } label: {
-                    HStack(spacing: Theme.Space.xs) {
-                        Image(systemName: "tray.full")
-                        Text("\(session.state.heldBack.count) held back")
-                        Image(systemName: open ? "chevron.down" : "chevron.up").font(.system(size: 9, weight: .bold))
-                    }
-                    .font(Theme.label)
-                    .padding(.horizontal, Theme.Space.m - 4)
-                    .frame(height: 30)
-                    .floatingBar(in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("Lines the gate changed or kept back")
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        .padding(Theme.Space.m)
     }
 }
 

@@ -64,7 +64,7 @@ struct SettingsPanel: View {
                 HStack {
                     Picker("Model", selection: Binding(get: { session.settings.model.model ?? "" }, set: { session.settings.model.model = $0.isEmpty ? nil : $0; save() })) {
                         Text("none").tag("")
-                        if session.isDemo { Text("demo (recorded answers)").tag(MapSession.demoModel) }
+                        if session.offersRecordings { Text("demo (recorded answers)").tag(MapSession.demoModel) }
                         ForEach(models, id: \.name) { m in
                             Text("\(m.name)\(m.parameterSize.map { " · \($0)" } ?? "")\(m.fits(inMemory: memory) ? "" : " (does not fit)")").tag(m.name)
                         }
@@ -175,6 +175,64 @@ struct HistoryPanel: View {
                 }
             }
             .frame(minHeight: 200, maxHeight: 360)
+        }
+    }
+}
+
+/// The model in use, in the toolbar: what Ollama has installed (and a demo's recordings),
+/// picked without opening Settings.
+struct ModelPicker: View {
+    @Bindable var session: MapSession
+    let openSettings: () -> Void
+    @State private var models: [ModelInfo] = []
+    @State private var reachable = true
+    private let memory = Int64(ProcessInfo.processInfo.physicalMemory)
+
+    var body: some View {
+        Menu {
+            if session.offersRecordings {
+                pick(MapSession.demoModel, title: "demo (recorded answers)")
+            }
+            if !reachable {
+                Text("Ollama is not answering at \(session.settings.model.host)")
+                Button("Start Ollama") {
+                    AppModel.shared.startOllama(host: session.ollama.host)
+                    Task { try? await Task.sleep(for: .seconds(2)); await load() }
+                }
+            } else if models.isEmpty {
+                Text("No models installed: run `ollama pull <model>`")
+            }
+            ForEach(models, id: \.name) { m in
+                pick(m.name, title: "\(m.name)\(m.parameterSize.map { " · \($0)" } ?? "")\(m.fits(inMemory: memory) ? "" : " (does not fit)")")
+            }
+            Divider()
+            Button("Refresh list") { Task { await load() } }
+            Button("Model settings…", action: openSettings)
+        } label: {
+            Label(session.settings.model.model ?? "Pick a model", systemImage: "cpu")
+                .labelStyle(.titleAndIcon)
+        }
+        .fixedSize()
+        .help("The model the map asks")
+        .task(id: session.settings.model.host) { await load() }
+    }
+
+    private func pick(_ name: String, title: String) -> some View {
+        Button {
+            session.settings.model.model = name
+            session.saveSettings()
+        } label: {
+            if session.settings.model.model == name { Label(title, systemImage: "checkmark") } else { Text(title) }
+        }
+    }
+
+    private func load() async {
+        do {
+            models = try await session.ollama.models()
+            reachable = true
+        } catch {
+            models = []
+            reachable = false
         }
     }
 }

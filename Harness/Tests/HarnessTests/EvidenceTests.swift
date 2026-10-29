@@ -15,6 +15,18 @@ final class EvidenceTests: XCTestCase {
         }
     }
 
+    func testPreviewKeepsTwentySentencesAndItsParagraphs() {
+        let text = (1...12).map { "Sentence \($0)." }.joined(separator: " ") + "\n" + (13...25).map { "Sentence \($0)." }.joined(separator: " ")
+        let preview = SentenceSplitter.preview(text, limit: 20)
+        let lines = preview.components(separatedBy: "\n")
+        XCTAssertEqual(lines.count, 2, "paragraphs stay")
+        XCTAssertTrue(lines[1].hasSuffix("Sentence 20. …"))
+        XCTAssertEqual(SentenceSplitter.split(preview.replacingOccurrences(of: " …", with: "")).count, 20)
+
+        XCTAssertEqual(SentenceSplitter.preview("One. Two.", limit: 20), "One. Two.", "nothing cut, no ellipsis")
+        XCTAssertEqual(SentenceSplitter.preview("One. Two.\nThree.", limit: 2), "One. Two. …")
+    }
+
     func testAppendOnlyStoreNumbersTextsAndSentences() {
         var store = EvidenceStore()
         let first = store.appendText("A. B.")

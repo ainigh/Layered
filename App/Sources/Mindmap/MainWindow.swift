@@ -23,9 +23,11 @@ enum Panel: String, CaseIterable, Identifiable {
     var defaultWidth: Double { self == .prompt || self == .settings ? 400 : 340 }
 }
 
-/// The one window: the map in the middle with its action bar, the Context list on the
-/// left, the selected node's details and the other panels on the right, a thin status bar
-/// below. Opening something over the map closes both sides until it closes.
+/// The one window: the map fills it, with its action bar at the top. The Context list
+/// floats over its left side and the details and other panels over its right, each opened
+/// from a pill in its top corner (as Notation opens from the bottom left), so the map never
+/// moves when a panel opens. A thin status bar below. Opening something over the map closes
+/// both sides until it closes.
 struct MainWindow: View {
     @Bindable var model: AppModel
 
@@ -36,8 +38,134 @@ struct MainWindow: View {
                 .navigationTitle(session.title)
                 .preferredColorScheme(session.settings.theme == "light" ? .light : session.settings.theme == "dark" ? .dark : nil)
         } else {
-            ContentUnavailableView("No map open", systemImage: "folder", description: Text("Open a folder or a demo from the menu bar."))
+            ProjectChooser(model: model)
+                .navigationTitle("Mindmap")
         }
+    }
+}
+
+/// Before any map: where the maps live (asked once), then which project to open or make.
+/// Each project is a folder in the maps folder with one map; a demo is a project too.
+struct ProjectChooser: View {
+    @Bindable var model: AppModel
+    @State private var name = ""
+    @State private var problem: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.l) {
+            if let workspace = model.workspace {
+                projects(workspace)
+            } else {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
+                    Image(systemName: "folder.badge.plus").font(.system(size: 34, weight: .light)).foregroundStyle(Theme.accent)
+                    Text("Where should your maps live?").font(.title2.weight(.semibold))
+                    Text("Choose a folder. Each project gets a folder inside it, with its map, its context and its recordings, so everything stays on this Mac where you can see it.")
+                        .font(Theme.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Button { model.chooseWorkspace() } label: { Label("Choose a folder…", systemImage: "folder") }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                }
+            }
+        }
+        .padding(Theme.Space.xl)
+        .frame(maxWidth: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.Map.background)
+    }
+
+    @ViewBuilder
+    private func projects(_ workspace: Workspace) -> some View {
+        let all = workspace.projects()
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text("Projects").font(.title2.weight(.semibold))
+            HStack(spacing: Theme.Space.xs) {
+                Image(systemName: "folder").foregroundStyle(.secondary)
+                Text(workspace.root.path).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                Button("Change…") { model.chooseWorkspace() }.buttonStyle(.link)
+            }
+            .font(Theme.caption)
+        }
+        HStack(spacing: Theme.Space.s) {
+            TextField("New project name", text: $name).textFieldStyle(.roundedBorder).onSubmit(create)
+            Button("Create", action: create).buttonStyle(.borderedProminent)
+                .disabled(Workspace.folderName(name).isEmpty)
+        }
+        if let problem { Text(problem).font(Theme.caption).foregroundStyle(.orange) }
+        if all.isEmpty {
+            Text("No projects yet. Name one above, or try a demo.").font(Theme.body).foregroundStyle(.secondary)
+        } else {
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(all) { project in ProjectRow(project: project) { model.open(project) } }
+                }
+            }
+            .frame(maxHeight: 340)
+        }
+        HStack(spacing: Theme.Space.s) {
+            Text("Try a demo:").font(Theme.caption).foregroundStyle(.secondary)
+            ForEach(Demo.Map.allCases, id: \.self) { map in
+                Button(map.rawValue.capitalized) { model.openDemo(map) }.controlSize(.small)
+            }
+        }
+    }
+
+    private func create() {
+        do {
+            try model.createProject(name)
+            name = ""
+            problem = nil
+        } catch {
+            problem = (error as? Workspace.Problem)?.description ?? error.localizedDescription
+        }
+    }
+}
+
+/// One project in the chooser: click to open it.
+struct ProjectRow: View {
+    let project: Workspace.Project
+    let open: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: Theme.Space.s) {
+                Image(systemName: project.isDemo ? "play.rectangle" : "point.3.connected.trianglepath.dotted")
+                    .foregroundStyle(Theme.accent).frame(width: 20)
+                Text(project.name).font(Theme.body)
+                Spacer()
+                if project.modified > .distantPast {
+                    Text(project.modified, format: .relative(presentation: .named)).font(Theme.caption).foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.s)
+            .background(hover ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+    }
+}
+
+/// The open project in the toolbar: switch to another, or go back to the list to make one.
+struct ProjectMenu: View {
+    @Bindable var session: MapSession
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Menu {
+            if let workspace = model.workspace {
+                ForEach(workspace.projects().prefix(12)) { project in
+                    Button(project.name) { model.open(project) }.disabled(project.name == session.title)
+                }
+                Divider()
+            }
+            Button("All projects…") { model.showProjects() }
+            Button("Choose maps folder…") { model.chooseWorkspace() }
+        } label: {
+            Label(session.title, systemImage: "folder").labelStyle(.titleAndIcon)
+        }
+        .fixedSize()
+        .help("The project open: switch to another or make a new one (⌘O)")
     }
 }
 
@@ -47,30 +175,30 @@ struct MapWindow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                pane(.leading)
-                ZStack {
-                    CanvasView(session: session)
-                        .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
-                            handleDrop(providers)
-                        }
-                    NotationDrawer(session: session)
-                    MapActionBar(session: session)
-                    if let overlay = session.overlay {
-                        MapOverlay(session: session, overlay: overlay)
-                            .transition(.opacity)
+            ZStack {
+                CanvasView(session: session)
+                    .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
+                        handleDrop(providers)
                     }
+                NotationDrawer(session: session)
+                side(.leading)
+                side(.trailing)
+                MapActionBar(session: session)
+                if let overlay = session.overlay {
+                    MapOverlay(session: session, overlay: overlay)
+                        .transition(.opacity)
                 }
-                .frame(minWidth: 360)
-                pane(.trailing)
             }
+            .frame(minWidth: 480)
             StatusBar(session: session, model: model)
         }
         .animation(Theme.slide, value: session.overlay)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                Button { model.togglePane(.leading, session: session) } label: { Label("Context", systemImage: "sidebar.left") }
-                    .help("Show or hide the context")
+                ProjectMenu(session: session, model: model)
+            }
+            ToolbarItem(placement: .principal) {
+                ModelPicker(session: session) { withAnimation(Theme.slide) { model.show(.settings, session: session) } }
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 if let running = session.running {
@@ -85,13 +213,11 @@ struct MapWindow: View {
                 Button { session.selection.forEach { session.expand($0) } } label: { Label("Expand", systemImage: "sparkles") }
                     .help("Expand the selected nodes (⌘E)")
                     .disabled(session.selection.isEmpty || session.running != nil)
-                Button { model.togglePane(.trailing, session: session) } label: { Label("Right pane", systemImage: "sidebar.right") }
-                    .help("Show or hide the details and other panels")
             }
         }
-        .onChange(of: session.selection) { _, selection in
-            // Clicking a node opens its details on the right.
-            if !selection.isEmpty { withAnimation(Theme.slide) { model.show(.details, session: session) } }
+        .onChange(of: session.detailsRequests) { _, _ in
+            // The ⓘ beside a selected node opens its details; selecting alone stays on the map.
+            withAnimation(Theme.slide) { model.show(.details, session: session) }
         }
         .onChange(of: session.selectedEdge) { _, edge in
             if edge != nil { withAnimation(Theme.slide) { model.show(.details, session: session) } }
@@ -101,12 +227,21 @@ struct MapWindow: View {
         }
     }
 
-    @ViewBuilder
-    private func pane(_ edge: PanelPlacement.Edge) -> some View {
-        if let panel = model.shownPanels[edge] {
-            SidePane(edge: edge, panel: panel, session: session, model: model) { panelBody(panel) }
-                .transition(.move(edge: edge == .leading ? .leading : .trailing))
+    /// One side's pill in its top corner and, when open, its panel floating below it. The
+    /// panels stop short of what sits in the bottom corners (Notation; spacing and zoom).
+    private func side(_ edge: PanelPlacement.Edge) -> some View {
+        let leading = edge == .leading
+        return VStack(alignment: leading ? .leading : .trailing, spacing: Theme.Space.s) {
+            PanePill(edge: edge, session: session, model: model)
+            if let panel = model.shownPanels[edge] {
+                SidePane(edge: edge, panel: panel, session: session, model: model) { panelBody(panel) }
+                    .transition(.move(edge: leading ? .leading : .trailing).combined(with: .opacity))
+            }
         }
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.top, Theme.Space.m)
+        .padding(.bottom, leading ? 62 : 176)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: leading ? .topLeading : .topTrailing)
     }
 
     @ViewBuilder
@@ -167,8 +302,8 @@ extension MapSession {
     }
 }
 
-/// One side of the window: on the right a tab strip of its panels, then the shown panel.
-/// The inner edge drags to resize.
+/// One side's panel, floating over the map: on the right a tab strip of its panels, then
+/// the shown panel. The inner edge drags to resize.
 struct SidePane<Content: View>: View {
     let edge: PanelPlacement.Edge
     let panel: Panel
@@ -192,14 +327,16 @@ struct SidePane<Content: View>: View {
                                content: content)
             }
             .frame(width: width)
-            .background(.background)
             if edge == .leading { resizeHandle(placement) }
         }
+        .background(.background.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusLarge))
+        .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
     }
 
     private func resizeHandle(_ placement: PanelPlacement) -> some View {
         Rectangle()
-            .fill(Color.primary.opacity(0.1))
+            .fill(Color.clear)
             .frame(width: 1)
             .overlay(Color.clear.frame(width: 7).contentShape(Rectangle()).onHover { inside in
                 if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
@@ -215,6 +352,36 @@ struct SidePane<Content: View>: View {
                     session.setPlacement(panel, p)
                     dragWidth = nil
                 })
+    }
+}
+
+/// A side's button in its top corner: the panel it opens (or closes), like the Notation
+/// pill in the bottom left. The Context pill counts the items not yet on the map.
+struct PanePill: View {
+    let edge: PanelPlacement.Edge
+    @Bindable var session: MapSession
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let open = model.shownPanels[edge] != nil
+        let panel = model.panel(for: edge)
+        let waiting = edge == .leading ? session.pendingItems.count : 0
+        Button {
+            withAnimation(Theme.slide) { model.togglePane(edge, session: session) }
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                Image(systemName: panel.symbol)
+                Text(panel.title)
+                if waiting > 0 { Text("· \(waiting) new").foregroundStyle(.secondary) }
+                Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 9, weight: .bold))
+            }
+            .font(Theme.label)
+            .padding(.horizontal, Theme.Space.m - 4)
+            .frame(height: 30)
+            .floatingBar(in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(open ? "Hide \(panel.title)" : edge == .leading ? "Show the context" : "Show \(panel.title) and the other panels")
     }
 }
 

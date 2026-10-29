@@ -135,7 +135,7 @@ struct ContextRow: View {
                 if let q = item.question {
                     Text("You asked: \(q)").font(Theme.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Text(item.body).font(Theme.caption).foregroundStyle(item.origin == .model ? Color.secondary : Color.primary).lineLimit(3)
+                Text(SentenceSplitter.preview(item.body, limit: 20)).font(Theme.caption).foregroundStyle(item.origin == .model ? Color.secondary : Color.primary)
             }
         }
         .padding(Theme.Space.s)

@@ -85,6 +85,14 @@ final class MapLayoutTests: XCTestCase {
         XCTAssertEqual(map.centers.positions["a"]?.x, map["a"]!.center.x)
     }
 
+    func testUnpinnedArrangesAfresh() throws {
+        let graph = try Compiler.compile("| a - to | b\n| b @pos 500,-200 @kind thing")
+        let fresh = MapLayout.compute(MapLayout.unpinned(graph))
+        XCTAssertFalse(fresh["b"]!.pinned)
+        XCTAssertEqual(fresh, MapLayout.compute(try Compiler.compile("| a - to | b\n| b @kind thing")))
+        XCTAssertEqual(MapLayout.unpinned(graph).node("b")?.note(kind: "kind"), "thing", "other notes stay")
+    }
+
     func testDeterministicAndCoversEveryNode() {
         let state = Demo.state(.large)
         let start = Date()

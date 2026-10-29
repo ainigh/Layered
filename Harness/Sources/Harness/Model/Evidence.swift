@@ -134,4 +134,24 @@ public enum SentenceSplitter {
         }
         return out
     }
+
+    /// The first `limit` sentences of `text`, its paragraphs kept, ending in “…” when
+    /// anything is left out.
+    public static func preview(_ text: String, limit: Int) -> String {
+        var paragraphs: [String] = []
+        var count = 0
+        for paragraph in text.components(separatedBy: "\n") {
+            let sentences = split(paragraph)
+            guard !sentences.isEmpty else { continue }
+            let room = limit - count
+            if sentences.count > room {
+                if room > 0 { paragraphs.append(sentences.prefix(room).joined(separator: " ") + " …") }
+                else if let last = paragraphs.popLast() { paragraphs.append(last + " …") }
+                return paragraphs.joined(separator: "\n")
+            }
+            paragraphs.append(sentences.joined(separator: " "))
+            count += sentences.count
+        }
+        return paragraphs.joined(separator: "\n")
+    }
 }

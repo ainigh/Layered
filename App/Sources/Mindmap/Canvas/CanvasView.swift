@@ -11,6 +11,7 @@ import Harness
 ///   + − 0, arrows         zoom, fit, move        hover a node  its card, its links drawn heavier
 ///   drag a node           pin it there (`@pos`)  ⌥-drag        link it to another node
 ///   ⇧-drag                select a box           right-click   the node's actions
+///   click a node          select it: ⓘ beside it opens its details, ✦ expands it
 ///   F, ✦                  fill the view          spacing       the least room between nodes
 ///
 /// The map fits the view when it opens and refits as the window resizes or the map grows,
@@ -72,7 +73,7 @@ struct CanvasView: View {
                 .gesture(canvasDrag(layout: layout))
                 .simultaneousGesture(pinch)
                 .onTapGesture(count: 2) { location in
-                    if let b = hitReview(location, layout) { decide(b); return }
+                    if let b = hitButton(location, layout) { press(b); return }
                     if let name = hit(location, layout) { session.expand(name) } else { zoom(by: Theme.Map.zoomStep, at: location, animate: true) }
                 }
                 .onTapGesture(count: 1) { location in
@@ -205,23 +206,29 @@ struct CanvasView: View {
         fit(layout: session.displayedLayout, animate: true)
     }
 
-    /// Fill the view: the map fitted, then its nodes slide into the room around them while
-    /// it refits, until zooming in gains nothing more. Pressed again while it runs, it stops
-    /// there; `restart` starts it over (the spacing changed).
+    /// Fill the view: the map arranged afresh (its pins ignored) and fitted, then its nodes
+    /// slide into the room around them while it refits, until zooming in gains nothing more.
+    /// Pressed again while it runs, it stops there; `restart` starts it over (the spacing changed).
     private func fillView(restart: Bool = false) {
         if spreadTask != nil {
             finishSpread(commit: true)
             if !restart { return }
         }
-        let start = session.displayedLayout
-        guard size.width > 0, session.viewingTurn == nil, start.nodes.count > 1 else { refit(); return }
+        let live = session.displayedLayout
+        guard size.width > 0, session.viewingTurn == nil, live.nodes.count > 1 else { refit(); return }
+        let start = session.autoArranged()
         let pad = Theme.Map.fitPad
         let first = Spread(layout: start, viewWidth: Double(size.width - 2 * pad), viewHeight: Double(size.height - 2 * pad),
                            gap: spacing, maxZoom: Double(Theme.Map.maxFit))
         touched = false
-        spreadFrom = start
+        spreadFrom = live
         spreadTask = Task { @MainActor in
             var spread = first
+            // The fresh arrangement first, for a moment, then the spread from there.
+            spreading = start
+            fit(layout: start, animate: true)
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
             show(spread, from: start)
             while !spread.finished {
                 let now = spread
@@ -328,8 +335,8 @@ struct CanvasView: View {
             var layer = world
             drawLabel(e, in: &layer)
         }
-        // Review buttons on top, the same size at any zoom.
-        for b in reviewButtons(layout, v) { drawReviewButton(b, in: &ctx) }
+        // Buttons on top, the same size at any zoom.
+        for b in mapButtons(layout, v) { drawMapButton(b, in: &ctx) }
 
         if let linkDrag, let p = layout[linkDrag.from] {
             var path = Path()
@@ -382,60 +389,84 @@ struct CanvasView: View {
         if p.boxed { drawCard(p, node, rect: rect, src: src, in: &ctx) } else { drawOpen(p, node, in: &ctx) }
     }
 
-    /// A ✓ or ✕ for something waiting for review, where `reviewButtons` puts it.
-    private struct ReviewButton {
+    /// A round button drawn on the map: ✓ or ✕ for something waiting for review, or ⓘ
+    /// (details on the right) and ✦ (expand, staying on the map) beside a selected node.
+    private struct MapButton {
+        enum Kind { case accept, reject, details, expand }
         let at: CGPoint
-        let accept: Bool
+        let kind: Kind
         var node: String?
         var edge: EdgeKey?
+        var enabled = true
         static let radius: CGFloat = 9
     }
 
-    /// Above a node's top right corner, or under a link's label (on its curve when it has none).
-    private func reviewButtons(_ layout: MapLayout, _ v: Viewport) -> [ReviewButton] {
-        guard session.viewingTurn == nil, !session.review.isEmpty else { return [] }
-        let r = ReviewButton.radius
-        var out: [ReviewButton] = []
+    /// ✓ ✕ above a node's top right corner, or under a link's label (on its curve when it
+    /// has none); ⓘ ✦ down the right side of each selected node.
+    private func mapButtons(_ layout: MapLayout, _ v: Viewport) -> [MapButton] {
+        guard session.viewingTurn == nil else { return [] }
+        let r = MapButton.radius
+        var out: [MapButton] = []
         for name in session.review.nodes.sorted() {
             guard let p = layout[name] else { continue }
             let corner = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y))
             let y = corner.y - r - 4
-            out.append(ReviewButton(at: CGPoint(x: corner.x - r - 1, y: y), accept: true, node: name))
-            out.append(ReviewButton(at: CGPoint(x: corner.x + r + 1, y: y), accept: false, node: name))
+            out.append(MapButton(at: CGPoint(x: corner.x - r - 1, y: y), kind: .accept, node: name))
+            out.append(MapButton(at: CGPoint(x: corner.x + r + 1, y: y), kind: .reject, node: name))
         }
         for key in session.review.edges.sorted() {
             guard let e = layout.edges.first(where: { $0.key == key }) else { continue }
             let at = v.screen(e.labelAt)
             let lines = [e.label, e.note].filter { !$0.isEmpty }.count
             let y = at.y + (lines == 0 ? 0 : CGFloat(Double(lines) * MapLayout.Metrics.labelLine / 2) * v.k + r + 2)
-            out.append(ReviewButton(at: CGPoint(x: at.x - r - 1, y: y), accept: true, edge: key))
-            out.append(ReviewButton(at: CGPoint(x: at.x + r + 1, y: y), accept: false, edge: key))
+            out.append(MapButton(at: CGPoint(x: at.x - r - 1, y: y), kind: .accept, edge: key))
+            out.append(MapButton(at: CGPoint(x: at.x + r + 1, y: y), kind: .reject, edge: key))
+        }
+        if draggingNode == nil {
+            for name in session.selection.sorted().prefix(24) {
+                guard let p = layout[name] else { continue }
+                let side = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.h / 2))
+                let x = side.x + r + 6
+                out.append(MapButton(at: CGPoint(x: x, y: side.y - r - 1), kind: .details, node: name))
+                out.append(MapButton(at: CGPoint(x: x, y: side.y + r + 1), kind: .expand, node: name, enabled: session.running == nil))
+            }
         }
         return out
     }
 
-    private func drawReviewButton(_ b: ReviewButton, in ctx: inout GraphicsContext) {
-        let r = ReviewButton.radius
+    private func drawMapButton(_ b: MapButton, in ctx: inout GraphicsContext) {
+        let r = MapButton.radius
         let circle = Path(ellipseIn: CGRect(x: b.at.x - r, y: b.at.y - r, width: 2 * r, height: 2 * r))
-        let ink: Color = b.accept ? .green : .red
-        ctx.fill(Path(ellipseIn: CGRect(x: b.at.x - r, y: b.at.y - r + 1, width: 2 * r, height: 2 * r)), with: .color(.black.opacity(0.12)))
-        ctx.fill(circle, with: .color(Theme.Map.background))
-        ctx.stroke(circle, with: .color(ink.opacity(0.7)), lineWidth: 1)
-        ctx.draw(Text(Image(systemName: b.accept ? "checkmark" : "xmark")).font(.system(size: 8.5, weight: .bold)).foregroundStyle(ink), at: b.at, anchor: .center)
+        let ink: Color, symbol: String
+        switch b.kind {
+        case .accept: ink = .green; symbol = "checkmark"
+        case .reject: ink = .red; symbol = "xmark"
+        case .details: ink = Theme.accent; symbol = "info"
+        case .expand: ink = Theme.accent; symbol = "sparkles"
+        }
+        var layer = ctx
+        if !b.enabled { layer.opacity = 0.4 }
+        layer.fill(Path(ellipseIn: CGRect(x: b.at.x - r, y: b.at.y - r + 1, width: 2 * r, height: 2 * r)), with: .color(.black.opacity(0.12)))
+        layer.fill(circle, with: .color(Theme.Map.background))
+        layer.stroke(circle, with: .color(ink.opacity(0.7)), lineWidth: 1)
+        layer.draw(Text(Image(systemName: symbol)).font(.system(size: 8.5, weight: .bold)).foregroundStyle(ink), at: b.at, anchor: .center)
     }
 
-    /// The ✓ or ✕ under a click, if any.
-    private func hitReview(_ point: CGPoint, _ layout: MapLayout) -> ReviewButton? {
-        reviewButtons(layout, view).last { hypot($0.at.x - point.x, $0.at.y - point.y) <= ReviewButton.radius + 2 }
+    /// The map button under a click, if any.
+    private func hitButton(_ point: CGPoint, _ layout: MapLayout) -> MapButton? {
+        mapButtons(layout, view).last { hypot($0.at.x - point.x, $0.at.y - point.y) <= MapButton.radius + 2 }
     }
 
-    private func decide(_ b: ReviewButton) {
+    private func press(_ b: MapButton) {
+        guard b.enabled else { return }
         withAnimation(Theme.selection) {
-            switch (b.node, b.edge, b.accept) {
-            case (let name?, _, true): session.accept(node: name)
-            case (let name?, _, false): session.reject(node: name)
-            case (nil, let key?, true): session.accept(edge: key)
-            case (nil, let key?, false): session.reject(edge: key)
+            switch (b.kind, b.node, b.edge) {
+            case (.accept, let name?, _): session.accept(node: name)
+            case (.reject, let name?, _): session.reject(node: name)
+            case (.accept, nil, let key?): session.accept(edge: key)
+            case (.reject, nil, let key?): session.reject(edge: key)
+            case (.details, let name?, _): session.selection = [name]; session.detailsRequests += 1
+            case (.expand, let name?, _): session.expand(name)
             default: break
             }
         }
@@ -575,7 +606,7 @@ struct CanvasView: View {
     }
 
     private func select(at point: CGPoint, layout: MapLayout, additive: Bool) {
-        if let b = hitReview(point, layout) { decide(b); return }
+        if let b = hitButton(point, layout) { press(b); return }
         withAnimation(Theme.selection) {
             if let name = hit(point, layout) {
                 if additive { session.selection.formSymmetricDifference([name]) } else { session.selection = [name] }
@@ -662,7 +693,7 @@ struct CanvasView: View {
                 if session.icons.entries.isEmpty { Text("Add SVGs to icons/ in the folder") }
             }
             if session.layout[name]?.pinned == true { Button("Release pin") { session.dispatch(.release(name)) } }
-            Button("Show details") { session.selection = [name] }
+            Button("Show details") { session.selection = [name]; session.detailsRequests += 1 }
             Divider()
             Button("Delete", role: .destructive) { session.dispatch(.delete(name)); session.selection = [] }
         } else if names.count > 1 {

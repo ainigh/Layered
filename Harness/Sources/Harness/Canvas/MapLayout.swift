@@ -136,6 +136,15 @@ public struct MapLayout: Equatable, Sendable {
     /// A rough measure for when no renderer is at hand (tests, the harness).
     public static let estimate: Measure = { text, role in Double(text.count) * (role == .name ? 7.2 : 6.4) }
 
+    /// The graph with every `@pos` pin left out: what the map looks like arranged afresh.
+    public static func unpinned(_ graph: Graph) -> Graph {
+        var out = graph
+        for (id, node) in graph.nodes where node.note(kind: "pos") != nil {
+            out.nodes[id]?.notes.removeAll { NoteKind.split($0)?.kind == "pos" }
+        }
+        return out
+    }
+
     /// Does the node get a glyph before its name? By default when it has a kind or an icon.
     public static func defaultGlyph(_ node: Node) -> Bool {
         node.note(kind: "kind") != nil || node.note(kind: "icon") != nil

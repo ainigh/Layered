@@ -6,10 +6,14 @@ import Harness
 /// applied to the map as a user turn (append-only, so History can undo it); text that does
 /// not compile changes nothing and says which line and why. Its second tab is what the gate
 /// held back from the model's last turn, so nothing the model wrote is silently altered.
+/// Optimize, at its top right, rewrites the log as the canonical form (the old log is
+/// archived) and tidies the text to match.
 struct NotationDrawer: View {
     @Bindable var session: MapSession
     @State private var open = false
     @State private var tab: Tab = .notation
+    /// Bumped by Optimize; the editor applies what is waiting, optimizes and reloads.
+    @State private var optimizeRequests = 0
 
     enum Tab: Hashable { case notation, heldBack }
 
@@ -19,17 +23,26 @@ struct NotationDrawer: View {
             Spacer()
             if open {
                 VStack(alignment: .leading, spacing: 0) {
-                    Picker("", selection: $tab) {
-                        Text("Notation").tag(Tab.notation)
-                        Text(held > 0 ? "Held back · \(held)" : "Held back").tag(Tab.heldBack)
+                    HStack {
+                        Picker("", selection: $tab) {
+                            Text("Notation").tag(Tab.notation)
+                            Text(held > 0 ? "Held back · \(held)" : "Held back").tag(Tab.heldBack)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize()
+                        Spacer()
+                        Button {
+                            tab = .notation
+                            optimizeRequests += 1
+                        } label: { Label("Optimize", systemImage: "wand.and.rays") }
+                            .controlSize(.small)
+                            .help("Rewrite the log as the map's canonical text: one line per fact, sorted (the old log is archived; \(session.state.logSize.lines) lines now, \(session.state.canonicalSize.lines) after)")
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
                     .padding(Theme.Space.s)
                     Divider()
                     switch tab {
-                    case .notation: NotationEditor(session: session)
+                    case .notation: NotationEditor(session: session, optimizeRequests: optimizeRequests)
                     case .heldBack: HeldBackList(session: session)
                     }
                 }
@@ -64,6 +77,9 @@ struct NotationDrawer: View {
 /// nothing waiting to apply.
 struct NotationEditor: View {
     @Bindable var session: MapSession
+    var optimizeRequests = 0
+    /// What the last Optimize did, until the next edit.
+    @State private var optimized: String?
     @State private var draft = ""
     /// The text last loaded from the map, to tell your typing from a reload.
     @State private var loaded = ""
@@ -93,6 +109,10 @@ struct NotationEditor: View {
                     ProgressView().controlSize(.mini)
                     Text("Applies when you pause typing…").foregroundStyle(.secondary)
                     Spacer(minLength: 0)
+                } else if let optimized {
+                    Image(systemName: "wand.and.rays").foregroundStyle(.secondary)
+                    Text(optimized).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
                 } else {
                     Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
                     Text(turns == 0 ? "Edit the text and the map follows. Each change is a turn History can undo." : "Applied to the map · \(turns) edit\(turns == 1 ? "" : "s") this time")
@@ -110,8 +130,10 @@ struct NotationEditor: View {
             debounce?.cancel()
             if pending { apply() }
         }
+        .onChange(of: optimizeRequests) { _, _ in optimize() }
         .onChange(of: draft) { _, text in
             guard text != loaded else { return }
+            optimized = nil
             pending = true
             debounce?.cancel()
             debounce = Task {
@@ -133,6 +155,19 @@ struct NotationEditor: View {
         base = session.state.graph
         pending = false
         problem = nil
+    }
+
+    /// Applies what is waiting (unless it does not compile), rewrites the log as the
+    /// canonical form, and tidies the text to it.
+    private func optimize() {
+        debounce?.cancel()
+        if pending { apply() }
+        guard problem == nil else { return }
+        let before = session.state.logSize.lines
+        session.optimize()
+        reload()
+        let after = session.state.logSize.lines
+        optimized = before == after ? "Already optimal: \(after) lines" : "Optimized: \(before) → \(after) lines (the old log is archived)"
     }
 
     private func apply() {

@@ -1,0 +1,167 @@
+import SwiftUI
+import Harness
+
+struct PromptPanel: View {
+    @Bindable var session: MapSession
+    @State private var kind: PromptKind = .extract
+    @State private var text = ""
+    @State private var problem: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            Picker("Prompt", selection: $kind) {
+                ForEach(PromptKind.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+            }
+            .onChange(of: kind, initial: true) { _, k in text = session.prompts.template(for: k); problem = nil }
+            TextEditor(text: $text).font(Theme.caption.monospaced()).frame(minHeight: 260, maxHeight: 400)
+            if let problem { Text(problem).font(Theme.caption).foregroundStyle(.red) }
+            HStack {
+                Button("Save") {
+                    problem = session.validatePrompt(kind, text)
+                    if problem == nil { session.savePrompt(kind, text == PromptSet.defaultTemplate(for: kind) ? nil : text) }
+                }
+                Button("Reset to default") { text = PromptSet.defaultTemplate(for: kind); session.savePrompt(kind, nil); problem = nil }
+                    .disabled(session.prompts.isDefault(kind))
+                Spacer()
+                Text(session.prompts.isDefault(kind) ? "default" : "edited").font(Theme.caption).foregroundStyle(.secondary)
+            }
+            if !session.prompts.isDefault(kind) {
+                DisclosureGroup("Diff against default") {
+                    PromptDiff(a: PromptSet.defaultTemplate(for: kind), b: text)
+                }
+            }
+        }
+    }
+}
+
+/// A line diff good enough to see what changed in a prompt.
+struct PromptDiff: View {
+    let a: String
+    let b: String
+    var body: some View {
+        let al = a.components(separatedBy: "\n"), bl = b.components(separatedBy: "\n")
+        let removed = al.filter { !bl.contains($0) }, added = bl.filter { !al.contains($0) }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(removed, id: \.self) { Text("- \($0)").font(Theme.caption.monospaced()).foregroundStyle(.red) }
+                ForEach(added, id: \.self) { Text("+ \($0)").font(Theme.caption.monospaced()).foregroundStyle(.green) }
+            }
+        }.frame(maxHeight: 160)
+    }
+}
+
+struct SettingsPanel: View {
+    @Bindable var session: MapSession
+    @State private var models: [ModelInfo] = []
+    @State private var connection: String?
+    @State private var memory = Int64(ProcessInfo.processInfo.physicalMemory)
+
+    var body: some View {
+        Form {
+            Section("Ollama") {
+                TextField("Host", text: $session.settings.model.host).onSubmit(save)
+                HStack {
+                    Picker("Model", selection: Binding(get: { session.settings.model.model ?? "" }, set: { session.settings.model.model = $0.isEmpty ? nil : $0; save() })) {
+                        Text("none").tag("")
+                        ForEach(models, id: \.name) { m in
+                            Text("\(m.name)\(m.fits(inMemory: memory) ? "" : " (does not fit)")").tag(m.name)
+                        }
+                    }
+                    Button("Refresh") { Task { await loadModels() } }
+                }
+                Slider(value: $session.settings.model.temperature, in: 0...1, step: 0.05) { Text("Temperature \(session.settings.model.temperature, specifier: "%.2f")") }
+                    .onChange(of: session.settings.model.temperature) { _, _ in save() }
+                TextField("Context size", value: $session.settings.model.contextSize, format: .number).onSubmit(save)
+                Toggle("Send GBNF grammar (falls back if rejected)", isOn: $session.settings.model.useGrammar).onChange(of: session.settings.model.useGrammar) { _, _ in save() }
+                HStack {
+                    Button("Test connection") { Task { await test() } }
+                    if let connection { Text(connection).font(Theme.caption).foregroundStyle(.secondary) }
+                }
+            }
+            Section("Transcription") {
+                TextField("whisper model", text: $session.settings.whisperModel).onSubmit(save)
+                Text("Downloaded on first use to ~/Library/Application Support/Mindmap/whisper").font(Theme.caption).foregroundStyle(.secondary)
+            }
+            Section("Folder") {
+                Text(session.title)
+                if case .folder(let url) = session.mode { Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
+                Text("Icons: add SVGs and a manifest.json to icons/ in the folder. \(session.icons.entries.count) keywords loaded.").font(Theme.caption)
+            }
+            Section("Appearance and layout") {
+                Picker("Theme", selection: $session.settings.theme) { Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark") }.onChange(of: session.settings.theme) { _, _ in save() }
+                Slider(value: $session.settings.layout.linkDistance, in: 60...300) { Text("Link distance") }.onChange(of: session.settings.layout.linkDistance) { _, _ in relayout() }
+                Slider(value: $session.settings.layout.headingPull, in: 0...0.3) { Text("Heading clustering") }.onChange(of: session.settings.layout.headingPull) { _, _ in relayout() }
+                TextField("Global capture shortcut", text: $session.settings.globalShortcut).onSubmit(save)
+                Toggle("Optimize every n turns", isOn: Binding(get: { session.settings.optimizeEveryTurns != nil }, set: { session.settings.optimizeEveryTurns = $0 ? 50 : nil; save() }))
+                if session.settings.optimizeEveryTurns != nil {
+                    Stepper("Every \(session.settings.optimizeEveryTurns ?? 50) turns", value: Binding(get: { session.settings.optimizeEveryTurns ?? 50 }, set: { session.settings.optimizeEveryTurns = $0; save() }), in: 5...500, step: 5)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(maxHeight: 560)
+        .task { await loadModels() }
+    }
+
+    private func save() { session.saveSettings() }
+    private func relayout() { save(); session.layout = Layout.compute(session.state.graph, options: session.settings.layout, previous: session.layout) }
+
+    private func loadModels() async {
+        models = (try? await session.runnerClient.models()) ?? []
+        if session.settings.model.model == nil, let best = ModelInfo.defaultModel(from: models, memory: memory) {
+            session.settings.model.model = best.name
+            save()
+        }
+    }
+
+    private func test() async {
+        do {
+            let list = try await session.runnerClient.models()
+            connection = "connected · \(list.count) models"
+            models = list
+        } catch {
+            connection = "not reachable: \(error)"
+        }
+    }
+}
+
+struct HistoryPanel: View {
+    @Bindable var session: MapSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack {
+                Button { session.dispatch(.undo) } label: { Label("Undo", systemImage: "arrow.uturn.backward") }.disabled(session.state.undoable.isEmpty)
+                Button { session.dispatch(.redo) } label: { Label("Redo", systemImage: "arrow.uturn.forward") }.disabled(session.state.redoable.isEmpty)
+                Spacer()
+                Button("Optimize") { session.optimize() }.disabled(session.isDemo)
+            }
+            let log = session.state.logSize, canon = session.state.canonicalSize
+            Text("log \(log.lines) lines · \(log.bytes / 1024) KB → canonical \(canon.lines) lines · \(canon.bytes / 1024) KB").font(Theme.caption).foregroundStyle(.secondary)
+            if session.state.turns.count > 1 {
+                Slider(value: Binding(get: { Double(session.viewingTurn ?? session.state.turns.last!.number) },
+                                      set: { session.viewingTurn = Int($0.rounded()) == session.state.turns.last!.number ? nil : Int($0.rounded()) }),
+                       in: Double(session.state.turns.first!.number)...Double(session.state.turns.last!.number), step: 1)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    ForEach(session.state.turns.reversed(), id: \.number) { turn in
+                        HStack(alignment: .top) {
+                            Text("\(turn.number)").font(Theme.label).frame(width: 32, alignment: .trailing)
+                            VStack(alignment: .leading) {
+                                Text("\(turn.who) · \(turn.what)").font(Theme.body)
+                                Text("\(turn.lines.count) lines · \(turn.date.formatted(date: .omitted, time: .shortened))").font(Theme.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("View") { session.viewingTurn = turn.number }.font(Theme.caption)
+                            if !session.isDemo { Button("Branch from here") { session.branch(atTurn: turn.number) }.font(Theme.caption) }
+                        }
+                        .padding(Theme.Space.xs)
+                        .background(session.viewingTurn == turn.number ? Theme.accent.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                    }
+                }
+            }
+            .frame(minHeight: 200, maxHeight: 360)
+        }
+    }
+}

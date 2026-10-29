@@ -48,6 +48,7 @@ struct NotationDrawer: View {
                 }
                 .frame(width: 500, height: 360)
                 .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
+                .shieldsMapScroll()
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             Button {

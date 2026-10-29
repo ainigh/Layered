@@ -25,6 +25,8 @@ import Harness
 /// between nodes already there is tinted, with the pair under its label.
 struct CanvasView: View {
     @Bindable var session: MapSession
+    /// Where panels and bars float over the map (in `MapScroll.space`): the wheel over them is theirs.
+    var shields: [CGRect] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Where the map is going; what is on screen may still be gliding toward it.
@@ -130,7 +132,7 @@ struct CanvasView: View {
             .background(Theme.Map.background)
             .clipped()
             .animation(Theme.selection, value: hovered)
-            .onScrollWheel { delta, location, zooms in
+            .onScrollWheel(shields: shields) { delta, location, zooms in
                 if zooms {
                     zoom(by: exp(delta.height * 0.01), at: location, animate: false)
                 } else {
@@ -481,11 +483,6 @@ struct CanvasView: View {
         }
     }
 
-    /// The node's icon: its own, a matching one from the icon set, or its kind's glyph.
-    private func symbol(for p: MapLayout.PlacedNode, kind: String?) -> String {
-        session.icons.icons(for: p.id.name).first { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil }
-            ?? IconManifest.fallbackSymbol(kind: kind)
-    }
 
     /// From the context or the user: the icon above the name, no card.
     private func drawOpen(_ p: MapLayout.PlacedNode, _ node: Node, in ctx: inout GraphicsContext) {
@@ -494,7 +491,7 @@ struct CanvasView: View {
         let cx = p.x + p.w / 2
         let iconY = p.y + p.anchorY
         let ink = kind == nil ? Theme.Map.branch(p.branch) ?? Theme.Map.secondary : Theme.kind(kind)
-        ctx.draw(Text(Image(systemName: symbol(for: p, kind: kind))).font(Theme.Map.icon).foregroundStyle(ink), at: CGPoint(x: cx, y: iconY), anchor: .center)
+        ctx.draw(Text(Image(systemName: session.symbol(for: node))).font(Theme.Map.icon).foregroundStyle(ink), at: CGPoint(x: cx, y: iconY), anchor: .center)
         if p.badge, let badge = Theme.provenance(node.note(kind: "src")).badge {
             ctx.draw(Text(Image(systemName: badge)).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.Map.tertiary),
                      at: CGPoint(x: cx + M.iconBox / 2 + 3, y: iconY - M.iconLine / 2 + 5), anchor: .center)
@@ -525,7 +522,7 @@ struct CanvasView: View {
         var x = p.x + M.padX
         if p.glyph {
             let kind = node.note(kind: "kind")
-            ctx.draw(Text(Image(systemName: symbol(for: p, kind: kind))).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.kind(kind)),
+            ctx.draw(Text(Image(systemName: session.symbol(for: node))).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.kind(kind)),
                      at: CGPoint(x: x + 6, y: nameY), anchor: .center)
             x += M.glyph
         }
@@ -696,10 +693,15 @@ struct CanvasView: View {
                 }
             }
             Menu("Icon") {
+                // Symbols its name could match, then the project's own icons.
+                ForEach(session.iconChoices(for: name), id: \.self) { icon in
+                    Button { session.dispatch(.applyLines(["| \(name) @icon \(icon)"], what: "icon \(name)")) } label: { Label(icon, systemImage: icon) }
+                }
+                if !session.icons.entries.isEmpty { Divider() }
                 ForEach(Array(session.icons.entries.keys.sorted().prefix(30)), id: \.self) { icon in
                     Button(icon) { session.dispatch(.applyLines(["| \(name) @icon \(icon)"], what: "icon \(name)")) }
                 }
-                if session.icons.entries.isEmpty { Text("Add SVGs to icons/ in the folder") }
+                if session.iconChoices(for: name).isEmpty && session.icons.entries.isEmpty { Text("No icon matches this name") }
             }
             if session.layout[name]?.pinned == true { Button("Release pin") { session.dispatch(.release(name)) } }
             Button("Show details") { session.selection = [name]; session.detailsRequests += 1 }
@@ -950,22 +952,42 @@ struct TextPrompt: View {
 }
 
 /// Scroll-wheel events: SwiftUI has no modifier, so an NSView reports them. Scrolling moves
-/// the map; ⌘-scroll (or a mouse wheel's zoom) zooms about the pointer.
+/// the map; ⌘-scroll (or a mouse wheel's zoom) zooms about the pointer. Over a panel or bar
+/// floating on the map (`shields`), the wheel is left to it, so its list scrolls.
 extension View {
-    func onScrollWheel(_ action: @escaping (_ delta: CGSize, _ location: CGPoint, _ zooms: Bool) -> Void) -> some View {
-        background(ScrollWheelCatcher(action: action))
+    func onScrollWheel(shields: [CGRect] = [], _ action: @escaping (_ delta: CGSize, _ location: CGPoint, _ zooms: Bool) -> Void) -> some View {
+        background(ScrollWheelCatcher(shields: shields, action: action))
+    }
+
+    /// Marks a view floating over the map: the wheel over it scrolls it, not the map.
+    func shieldsMapScroll() -> some View {
+        background(GeometryReader { geo in
+            Color.clear.preference(key: MapScroll.Shields.self, value: [geo.frame(in: .named(MapScroll.space))])
+        })
+    }
+}
+
+/// The map's frame, which the panels and bars over it report their frames in.
+enum MapScroll {
+    static let space = "map"
+
+    struct Shields: PreferenceKey {
+        static let defaultValue: [CGRect] = []
+        static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) { value += nextValue() }
     }
 }
 
 struct ScrollWheelCatcher: NSViewRepresentable {
+    let shields: [CGRect]
     let action: (CGSize, CGPoint, Bool) -> Void
-    func makeNSView(context: Context) -> ScrollView { let v = ScrollView(); v.action = action; return v }
-    func updateNSView(_ nsView: ScrollView, context: Context) { nsView.action = action }
+    func makeNSView(context: Context) -> ScrollView { let v = ScrollView(); v.action = action; v.shields = shields; return v }
+    func updateNSView(_ nsView: ScrollView, context: Context) { nsView.action = action; nsView.shields = shields }
 
     /// Sits behind the map and takes the wheel events over its frame: SwiftUI's own views
     /// are what the pointer hits, so a local event monitor catches them on their way in.
     final class ScrollView: NSView {
         var action: ((CGSize, CGPoint, Bool) -> Void)?
+        var shields: [CGRect] = []
         private var monitor: Any?
         override var isFlipped: Bool { true }
 
@@ -978,6 +1000,8 @@ struct ScrollWheelCatcher: NSViewRepresentable {
                 guard let self, let window = self.window, event.window === window else { return event }
                 let location = self.convert(event.locationInWindow, from: nil)
                 guard self.bounds.contains(location), !self.isHiddenOrHasHiddenAncestor else { return event }
+                // Over a panel, a bar or an overlay: its own lists and text scroll.
+                guard !self.shields.contains(where: { $0.contains(location) }) else { return event }
                 // A mouse wheel moves in lines; a trackpad in points.
                 let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
                 self.action?(CGSize(width: event.scrollingDeltaX * scale, height: event.scrollingDeltaY * scale), location, event.modifierFlags.contains(.command))

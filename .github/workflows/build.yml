@@ -49,6 +49,8 @@ jobs:
           VERSION="0.1.$RUN_NUMBER"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           VERSION="$VERSION" BRANCH="$REF_NAME" scripts/build-app.sh
+      - name: Open the app and check it runs
+        run: scripts/smoke-test.sh
       - uses: actions/upload-artifact@v4
         with:
           name: Mindmap

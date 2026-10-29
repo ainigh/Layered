@@ -118,7 +118,7 @@ final class Updater {
         switch outcome {
         case let .available(plan) where plan.commit?.sha != toldSHA || userInitiated:
             toldSHA = plan.commit?.sha
-            Notifier.post(title: "An update is ready", body: plan.title + ". Click to install it (the app restarts).", update: true)
+            Notifier.post(title: "An update is ready", body: plan.title + ". Click to review it; nothing installs until you say so.", update: true)
         case .upToDate where userInitiated:
             Notifier.post(title: "Mindmap is up to date", body: versionLine)
         case let .failed(message) where userInitiated:
@@ -126,6 +126,21 @@ final class Updater {
         default:
             break
         }
+    }
+
+    /// Installing is always the user's choice: a click on the notification or the menu asks first,
+    /// naming the update and saying the app restarts. Nothing installs without "Install".
+    func confirmInstall() {
+        guard let plan = available else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Install this update?"
+        var info = "\(plan.title)\n\nMindmap quits and opens again on the new version; your maps stay as they are."
+        if case .buildHere = plan { info += " GitHub hasn't built it yet, so it's built on this Mac first (a few minutes)." }
+        alert.informativeText = info
+        alert.addButton(withTitle: "Install and Restart")
+        alert.addButton(withTitle: "Not Now")
+        if alert.runModal() == .alertFirstButtonReturn { install() }
     }
 
     func install() {

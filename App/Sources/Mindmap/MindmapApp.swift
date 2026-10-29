@@ -58,7 +58,7 @@ final class AppModel {
     init() {
         session = MapSession.demo(.typical)
         ollama.startIfInstalled()
-        Notifier.shared.start { [weak self] in self?.updater.install() }
+        Notifier.shared.start { [weak self] in self?.updater.confirmInstall() }
         updater.start()
         shortcut = GlobalShortcut { [weak self] text in
             Task { @MainActor in self?.capture(text) }
@@ -166,7 +166,7 @@ struct UpdateMenuItems: View {
             case .checking:
                 Text("Checking for updates…")
             case let .available(plan):
-                Button(plan.title) { updater.install() }
+                Button(plan.title + "…") { updater.confirmInstall() }
             case let .installing(step):
                 Text(step)
             case let .failed(message):

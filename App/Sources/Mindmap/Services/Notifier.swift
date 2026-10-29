@@ -1,7 +1,7 @@
 import Foundation
 import UserNotifications
 
-/// macOS notifications for the updater. A click on an "update ready" one installs it.
+/// macOS notifications for the updater. A click on an "update ready" one asks whether to install it.
 /// Only an installed app posts them: `UNUserNotificationCenter` needs a bundle (not `swift run`).
 final class Notifier: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     static let shared = Notifier()

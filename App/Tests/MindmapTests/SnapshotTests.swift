@@ -41,16 +41,12 @@ final class SnapshotTests: XCTestCase {
     }
 
     func testPanels() throws {
-        let session = MapSession.demo(.typical)
+        let session = Fixture.contextSession()
         session.selection = ["paper"]
-        session.clarifyQuestions = [ClarifyQuestion(sentence: 1, reason: "pronoun", question: "Who is \"they\"?")]
-        session.chatLog = [("you", "who reviews?"), ("model", "Ana reviews the paper.")]
         session.dedupeProposals = Dedupe.cheapPass(session.state.graph)
         let panels: [(String, AnyView)] = [
             ("context", AnyView(ContextPanel(session: session))),
-            ("clarify", AnyView(ClarifyPanel(session: session))),
-            ("proof", AnyView(ProofPanel(session: session))),
-            ("chat", AnyView(ChatPanel(session: session))),
+            ("details", AnyView(DetailsPanel(session: session))),
             ("outline", AnyView(OutlinePanel(session: session))),
             ("prompt", AnyView(PromptPanel(session: session))),
             ("settings", AnyView(SettingsPanel(session: session))),
@@ -58,7 +54,19 @@ final class SnapshotTests: XCTestCase {
         ]
         for (name, view) in panels {
             for dark in [false, true] {
-                try snapshot("panel-\(name)", PanelContainer(title: name, symbol: "circle", placement: .constant(PanelPlacement()), onClose: {}) { view }, width: 360, height: 640, dark: dark)
+                try snapshot("panel-\(name)", PanelContainer(title: name, symbol: "circle", onClose: {}) { view }, width: 360, height: 640, dark: dark)
+            }
+        }
+    }
+
+    func testOverlays() throws {
+        let session = Fixture.contextSession()
+        session.clarifyQuestions = [ClarifyQuestion(sentence: 1, reason: "pronoun", question: "Who is \"they\"?")]
+        session.verifyReport = VerifyReport.parse("s2\n| kim - chairs | workshop @src text @s 2")
+        let overlays: [(String, Overlay)] = [("item", .item(1)), ("reply", .item(session.state.context.items.last!.id)), ("clarify", .clarify), ("coverage", .coverage)]
+        for (name, overlay) in overlays {
+            for dark in [false, true] {
+                try snapshot("overlay-\(name)", MapOverlay(session: session, overlay: overlay), width: 900, height: 640, dark: dark)
             }
         }
     }
@@ -71,16 +79,18 @@ final class SnapshotTests: XCTestCase {
     }
 }
 
-/// Smoke flows the harness can run without a mouse: open demo, submit, expand, undo.
+/// Smoke flows the harness can run without a mouse: open demo, add, submit, expand, undo, ask.
 @MainActor
 final class SessionFlowTests: XCTestCase {
     func testDemoSubmitExpandUndo() async throws {
         let session = MapSession.demo(.tiny)
         let nodes = session.state.graph.nodes.count
-        session.contextDraft = "Kim chairs the workshop."
-        session.submit(sentenceMode: false)
+        session.addContext("Kim chairs the workshop.")
+        XCTAssertEqual(session.pendingItems.count, 1)
+        session.submit()
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertGreaterThanOrEqual(session.state.evidence.count, 3)
+        XCTAssertEqual(session.pendingItems.count, 0, "submitted items are on the map")
         let afterSubmit = session.state.graph.nodes.count
         XCTAssertGreaterThanOrEqual(afterSubmit, nodes)
         session.expand("paper")
@@ -90,5 +100,18 @@ final class SessionFlowTests: XCTestCase {
         session.dispatch(.undo)
         XCTAssertGreaterThan(session.state.log.count, before, "undo appends")
         XCTAssertEqual(session.state.graph.nodes.count, afterSubmit, "expand undone")
+    }
+
+    func testAskAddsLinesAndAReplyItem() async throws {
+        let session = MapSession.demo(.typical)
+        let items = session.state.context.items.count
+        session.ask("what should Sam do next?")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(session.state.context.items.count, items + 1)
+        let reply = try XCTUnwrap(session.state.context.items.last)
+        XCTAssertEqual(reply.origin, .model)
+        XCTAssertFalse(reply.selected, "a reply waits to be selected")
+        XCTAssertEqual(session.overlay, .item(reply.id), "the reply opens over the map")
+        XCTAssertNotNil(session.state.graph.node("paper")?.notes.first { $0.hasPrefix("todo") }, "the reply's lines are on the map")
     }
 }

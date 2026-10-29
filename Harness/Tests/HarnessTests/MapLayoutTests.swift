@@ -62,7 +62,7 @@ final class MapLayoutTests: XCTestCase {
         XCTAssertEqual(paper.notes, ["date 2026-11-03"], "src, kind and proof are drawn another way")
         XCTAssertTrue(paper.glyph)
         XCTAssertTrue(paper.badge)
-        XCTAssertFalse(map["plain"]!.glyph)
+        XCTAssertTrue(map["plain"]!.glyph, "an open node always shows an icon")
         XCTAssertFalse(map["plain"]!.badge)
         let cut = map.nodes.first { $0.id.name.hasPrefix("word") }!
         XCTAssertTrue(cut.cut)
@@ -98,5 +98,39 @@ final class MapLayoutTests: XCTestCase {
             XCTAssertLessThanOrEqual(n.y + n.h, one.maxY)
         }
         XCTAssertEqual(MapLayout.compute(Graph()).nodes.count, 0)
+    }
+
+    func testOnlyTheModelsExtrasAreCards() throws {
+        let cases: [(src: String?, boxed: Bool, badge: Bool)] = [
+            (nil, false, false), ("text", false, false), ("user", false, true),
+            ("world", true, true), ("guess", true, true), ("advice", true, true),
+        ]
+        for c in cases {
+            let line = "| a @kind thing" + (c.src.map { " @src \($0)" } ?? "") + " @date 2026-11-03"
+            let a = MapLayout.compute(try Compiler.compile(line))["a"]!
+            XCTAssertEqual(a.boxed, c.boxed, "\(c.src ?? "none")")
+            XCTAssertEqual(a.badge, c.badge, "\(c.src ?? "none")")
+            XCTAssertEqual(a.notes, ["date 2026-11-03"])
+            if c.boxed {
+                XCTAssertEqual(a.h, MapLayout.Metrics.nameLine + MapLayout.Metrics.noteLine + 2 * MapLayout.Metrics.padY)
+            } else {
+                typealias M = MapLayout.Metrics
+                XCTAssertEqual(a.h, M.openPadY + M.iconLine + M.iconGap + M.nameLine + M.noteLine + M.openPadY, "icon above the name, then the note")
+                XCTAssertGreaterThanOrEqual(a.w, M.iconBox + 2 * M.openPadX)
+            }
+        }
+    }
+
+    func testEdgesMeetAnOpenNodesIcon() throws {
+        let graph = try Compiler.compile("| anastasia rodriguez - writes | b @src world\n| anastasia rodriguez @src text")
+        let map = MapLayout.compute(graph)
+        let a = map["anastasia rodriguez"]!, b = map["b"]!
+        let e = map.edges[0]
+        XCTAssertFalse(a.boxed)
+        XCTAssertTrue(b.boxed)
+        XCTAssertEqual(e.p0.y, a.y + MapLayout.Metrics.openPadY + MapLayout.Metrics.iconLine / 2, "level with the icon")
+        XCTAssertEqual(e.p0.x, a.center.x + MapLayout.Metrics.iconBox / 2, accuracy: 0.5, "beside the icon, not the long name")
+        XCTAssertEqual(e.p3.x, b.x)
+        XCTAssertEqual(e.p3.y, b.center.y)
     }
 }

@@ -88,7 +88,7 @@ public struct PromptSet: Equatable, Sendable {
             """
         case .chat:
             return """
-            You answer a question about a mind map and the text behind it. Answer in plain prose, briefly. If the answer adds facts worth keeping on the map, put them after the prose in one ```mm block, one line each, marked @src world or @src advice (or @src text with @s n when the context states it).
+            You answer a message about a mind map and the text behind it. When the message asks you to add to or change the map, put the lines in one ```mm block, one line each, marked @src world or @src advice (or @src text with @s n when the context states it), with at most one sentence of prose before it. Otherwise answer in plain prose, briefly, and add a ```mm block only for facts worth keeping on the map.
             \(rules)
 
             Existing nodes: {nodes}
@@ -161,12 +161,14 @@ public struct PromptSet: Equatable, Sendable {
 
 /// Renders the evidence store as the numbered context the prompts expect.
 public enum ContextRenderer {
-    public static func numbered(_ evidence: EvidenceStore, texts: [Int]? = nil) -> String {
+    /// `texts` limits it to those texts (all when nil); a text in `replies` is the model's own
+    /// earlier reply, labelled so the model does not take it as the user's text.
+    public static func numbered(_ evidence: EvidenceStore, texts: [Int]? = nil, replies: Set<Int> = []) -> String {
         var out: [String] = []
         var currentText: Int?
         for sentence in evidence.sentences where texts?.contains(sentence.text) ?? true {
             if sentence.text != currentText {
-                out.append("[text \(sentence.text)]")
+                out.append(replies.contains(sentence.text) ? "[text \(sentence.text) · your earlier reply, not evidence]" : "[text \(sentence.text)]")
                 currentText = sentence.text
             }
             let speaker = sentence.speaker.map { " (\($0))" } ?? ""

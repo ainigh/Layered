@@ -11,6 +11,10 @@ import Foundation
 /// along outgoing and undirected edges hangs every other node under the first node that
 /// reaches it. Edges the trees do not use (cycles, second parents) are cross-links, drawn
 /// dashed. A node with `@pos` keeps that place (its centre) and its edges follow it.
+///
+/// A node from the context or the user (`src text` or `src user`) is open: its icon above
+/// its name, no card, edges meeting the icon. The model's extras (`world`, `guess`,
+/// `advice`) are cards, so they can never be mistaken for what the text says.
 public struct MapLayout: Equatable, Sendable {
     /// What a piece of text is set in: the node name, a note under it, or an edge label.
     public enum TextRole: Sendable { case name, note, label }
@@ -21,7 +25,7 @@ public struct MapLayout: Equatable, Sendable {
     public enum Metrics {
         public static let nameLine = 18.0
         public static let noteLine = 16.0
-        public static let labelLine = 16.0
+        public static let labelLine = 15.0
         public static let padX = 12.0
         public static let padY = 7.0
         /// Room for the glyph before the name (the node's icon or kind).
@@ -38,6 +42,13 @@ public struct MapLayout: Equatable, Sendable {
         public static let maxColumnGap = 260.0
         /// Notes shown under a name; the rest are in the hover card.
         public static let maxNotes = 3
+        /// An open node: the icon's line (its symbol is set at twice the name's size), the
+        /// box edges meet beside it, the gap above the name, and the padding around it all.
+        public static let iconLine = 30.0
+        public static let iconBox = 32.0
+        public static let iconGap = 2.0
+        public static let openPadX = 6.0
+        public static let openPadY = 4.0
     }
 
     /// Note kinds the canvas does not print under a name: they are drawn another way
@@ -66,6 +77,8 @@ public struct MapLayout: Equatable, Sendable {
         public let glyph: Bool
         public let badge: Bool
         public let pinned: Bool
+        /// A card (the model's extras) or open (icon above name).
+        public let boxed: Bool
         /// Top-left corner and size.
         public var x: Double
         public var y: Double
@@ -73,6 +86,10 @@ public struct MapLayout: Equatable, Sendable {
         public let h: Double
 
         public var center: Point { Point(x: x + w / 2, y: y + h / 2) }
+        /// Where edges meet the node: this far down from its top, and this far in from its
+        /// sides (a card's edges meet its sides at mid-height; an open node's meet its icon).
+        public var anchorY: Double { boxed ? h / 2 : Metrics.openPadY + Metrics.iconLine / 2 }
+        public var anchorInset: Double { boxed ? 0 : max(0, (w - Metrics.iconBox) / 2) }
         public func contains(_ p: Point) -> Bool { p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h }
     }
 
@@ -121,6 +138,12 @@ public struct MapLayout: Equatable, Sendable {
     /// Does the node get a glyph before its name? By default when it has a kind or an icon.
     public static func defaultGlyph(_ node: Node) -> Bool {
         node.note(kind: "kind") != nil || node.note(kind: "icon") != nil
+    }
+
+    /// Is the node drawn as a card? Only the model's extras are; what came from the context
+    /// or the user (and a node with no provenance) is open.
+    public static func isBoxed(_ node: Node) -> Bool {
+        ["world", "guess", "advice"].contains(node.note(kind: "src") ?? "")
     }
 
     /// Does the node's provenance get a badge after its name?
@@ -198,15 +221,26 @@ public struct MapLayout: Equatable, Sendable {
             let shown = fit(id.name, .name, M.maxText, measure)
             let all = shownNotes(node)
             let notes = all.prefix(M.maxNotes).map { fit($0, .note, M.maxText, measure) }
-            let hasGlyph = glyph(node), hasBadge = hasBadge(node.note(kind: "src"))
-            let nameW = measure(shown, .name) + (hasGlyph ? M.glyph : 0) + (hasBadge ? M.badge : 0)
-            let textW = ([nameW] + notes.map { measure($0, .note) }).max()!
+            let boxed = isBoxed(node)
+            // An open node always shows its icon (the kind's glyph when nothing else matches).
+            let hasGlyph = !boxed || glyph(node), hasBadge = hasBadge(node.note(kind: "src"))
             let pin = node.note(kind: "pos").flatMap(Position.init(noteValue:))
+            let w: Double, h: Double
+            if boxed {
+                let nameW = measure(shown, .name) + (hasGlyph ? M.glyph : 0) + (hasBadge ? M.badge : 0)
+                let textW = ([nameW] + notes.map { measure($0, .note) }).max()!
+                w = (textW + 2 * M.padX).rounded(.up)
+                h = M.nameLine + Double(notes.count) * M.noteLine + 2 * M.padY
+            } else {
+                let textW = ([M.iconBox, measure(shown, .name)] + notes.map { measure($0, .note) }).max()!
+                w = (textW + 2 * M.openPadX).rounded(.up)
+                h = M.openPadY + M.iconLine + M.iconGap + M.nameLine + Double(notes.count) * M.noteLine + M.openPadY
+            }
             sized[id] = PlacedNode(
                 id: id, name: shown, notes: notes,
                 cut: shown != id.name || notes.count < all.count || zip(notes, all).contains { $0 != $1 },
-                depth: depth[id] ?? 0, branch: branch[id] ?? 0, glyph: hasGlyph, badge: hasBadge, pinned: pin != nil,
-                x: 0, y: 0, w: (textW + 2 * M.padX).rounded(.up), h: M.nameLine + Double(notes.count) * M.noteLine + 2 * M.padY)
+                depth: depth[id] ?? 0, branch: branch[id] ?? 0, glyph: hasGlyph, badge: hasBadge, pinned: pin != nil, boxed: boxed,
+                x: 0, y: 0, w: w, h: h)
         }
 
         // Columns: as wide as their widest node, apart by enough room for the labels between.
@@ -341,18 +375,19 @@ public struct MapLayout: Equatable, Sendable {
     static func route(_ placed: inout PlacedEdge, _ edge: Edge, _ a: PlacedNode, _ b: PlacedNode) {
         // Left to right where the nodes allow it; otherwise bulge out to the right.
         let (s, t) = a.x <= b.x ? (a, b) : (b, a)
-        let sy = s.y + s.h / 2, ty = t.y + t.h / 2
+        let sy = s.y + s.anchorY, ty = t.y + t.anchorY
+        let sRight = s.x + s.w - s.anchorInset, tLeft = t.x + t.anchorInset, tRight = t.x + t.w - t.anchorInset
         let p0: Point, p1: Point, p2: Point, p3: Point
-        if s.x + s.w < t.x {
-            p0 = Point(x: s.x + s.w, y: sy)
-            p3 = Point(x: t.x, y: ty)
+        if sRight < tLeft {
+            p0 = Point(x: sRight, y: sy)
+            p3 = Point(x: tLeft, y: ty)
             let dx = (p3.x - p0.x) / 2
             p1 = Point(x: p0.x + dx, y: sy)
             p2 = Point(x: p3.x - dx, y: ty)
         } else {
             // Overlapping columns: right side to right side, around the outside.
-            p0 = Point(x: s.x + s.w, y: sy)
-            p3 = Point(x: t.x + t.w, y: ty)
+            p0 = Point(x: sRight, y: sy)
+            p3 = Point(x: tRight, y: ty)
             let out = max(p0.x, p3.x) + 40 + abs(ty - sy) * 0.15
             p1 = Point(x: out, y: sy)
             p2 = Point(x: out, y: ty)

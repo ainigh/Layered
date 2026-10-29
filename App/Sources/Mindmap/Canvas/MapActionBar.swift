@@ -3,8 +3,9 @@ import Harness
 
 /// The map's actions, floating at its top: Submit (the selected items not yet on the map),
 /// Check coverage, Ask me, and a box to ask the model or tell it what to add. What the
-/// model adds goes on the map; what it says back as text opens over the map and joins the
-/// context as a model item.
+/// model adds goes on the map at once, flagged for review (✓ keeps it, ✕ deletes it); what
+/// it says back as text joins the context as a model item, and a note under the bar says
+/// so. Nothing opens over the map unless something went wrong.
 struct MapActionBar: View {
     @Bindable var session: MapSession
     @State private var message = ""
@@ -49,6 +50,15 @@ struct MapActionBar: View {
             .floatingBar(in: Capsule())
             if let running = session.running {
                 RunProgress(session: session, kind: running)
+            }
+            if let error = session.lastError {
+                ErrorNote(session: session, message: error.message, raw: error.raw, retry: error.retry)
+            }
+            if let notice = session.notice {
+                NoticeNote(session: session, notice: notice)
+            }
+            if !session.review.isEmpty, session.viewingTurn == nil {
+                ReviewNote(session: session)
             }
             if let walk = session.sentenceWalk {
                 WalkProgress(session: session, walk: walk)
@@ -108,6 +118,75 @@ struct RunProgress: View {
         }
         .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.xs).padding(.vertical, Theme.Space.xs)
         .floatingBar(in: Capsule())
+    }
+}
+
+/// What the model added that is waiting for a decision, and both decisions for all of it.
+struct ReviewNote: View {
+    @Bindable var session: MapSession
+
+    var body: some View {
+        let n = session.review.count
+        HStack(spacing: Theme.Space.s) {
+            Image(systemName: "sparkles").foregroundStyle(Theme.accent)
+            Text(n == 1 ? "1 addition from the model to review" : "\(n) additions from the model to review").font(Theme.caption)
+            Button { session.acceptAll() } label: { Label("Accept all", systemImage: "checkmark") }
+                .controlSize(.small)
+                .help("Keep everything the model added")
+            Button(role: .destructive) { session.rejectAll() } label: { Label("Delete all", systemImage: "xmark") }
+                .controlSize(.small)
+                .help("Take everything waiting for review off the map (one undo brings it back)")
+        }
+        .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.xs).padding(.vertical, Theme.Space.xs)
+        .floatingBar(in: Capsule())
+    }
+}
+
+/// A word from the model's last turn: a reply that joined the context, or what Check
+/// coverage found. It never covers the map.
+struct NoticeNote: View {
+    @Bindable var session: MapSession
+    let notice: Notice
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            Image(systemName: "text.bubble").foregroundStyle(.secondary)
+            Text(notice.text).font(Theme.caption).lineLimit(2).frame(maxWidth: 420, alignment: .leading)
+            if let id = notice.item {
+                Button("Open") { session.notice = nil; session.open(item: id) }.controlSize(.small)
+            }
+            if notice.report {
+                Button("Report") { session.notice = nil; session.overlay = .coverage }.controlSize(.small)
+            }
+            Button { session.notice = nil } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
+        }
+        .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.s).padding(.vertical, Theme.Space.xs)
+        .floatingBar(in: Capsule())
+    }
+}
+
+/// A model request that failed, with what it said and Retry.
+struct ErrorNote: View {
+    @Bindable var session: MapSession
+    let message: String
+    let raw: String
+    let retry: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(message).font(Theme.label)
+                Text(raw).font(Theme.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
+            }
+            .frame(maxWidth: 420, alignment: .leading)
+            if let retry { Button("Retry") { session.lastError = nil; retry() }.controlSize(.small).disabled(session.running != nil) }
+            Button { session.lastError = nil } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
+        }
+        .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.s).padding(.vertical, Theme.Space.s)
+        .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
     }
 }
 

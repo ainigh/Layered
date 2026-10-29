@@ -20,13 +20,22 @@ public struct GateOptions: Sendable {
     public var budget: Int?
     /// Edge labels longer than this are trimmed (SPEC: four words or fewer).
     public var labelWordCap: Int
+    /// Append a line even when the map already says it (the log allows repeats).
+    public var keepDuplicates: Bool
 
-    public init(prompt: PromptKind, textID: Int? = nil, aliases: [String: [String]] = [:], budget: Int?? = nil, labelWordCap: Int = 4) {
+    public init(prompt: PromptKind, textID: Int? = nil, aliases: [String: [String]] = [:], budget: Int?? = nil, labelWordCap: Int = 4, keepDuplicates: Bool = false) {
         self.prompt = prompt
         self.textID = textID
         self.aliases = aliases
         self.budget = budget ?? GateOptions.defaultBudget(for: prompt)
         self.labelWordCap = labelWordCap
+        self.keepDuplicates = keepDuplicates
+    }
+
+    /// Everything that passes the checks goes on the map, repeats and all, with no budget:
+    /// the user reviews the model's additions on the map itself (`Review`).
+    public static func appendAll(prompt: PromptKind, textID: Int? = nil, aliases: [String: [String]] = [:]) -> GateOptions {
+        GateOptions(prompt: prompt, textID: textID, aliases: aliases, budget: .some(nil), keepDuplicates: true)
     }
 
     public static func defaultBudget(for prompt: PromptKind) -> Int? {
@@ -351,6 +360,10 @@ public struct GateSession: Sendable {
             return []
         }
         if Canonical.render(trial) == before {
+            if options.keepDuplicates {
+                result.lines += emitted
+                return emitted
+            }
             result.events.append(GateEvent(kind: .dropped, raw: raw, reason: "already in the map"))
             return []
         }

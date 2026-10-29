@@ -236,8 +236,9 @@ public enum Action: Equatable, Sendable {
     case answer(ClarifyQuestion?, String)
     /// Map a speaker label to a name: `Speaker 1 is Ana`, appended as a clarification.
     case nameSpeaker(label: String, name: String)
-    /// Run model output through the gate and append what passes.
-    case applyModelOutput(String, prompt: PromptKind, textID: Int?, about: String)
+    /// Run model output through the gate and append what passes (with `appendAll`,
+    /// repeats and lines over the budget too: see `GateOptions.appendAll`).
+    case applyModelOutput(String, prompt: PromptKind, textID: Int?, about: String, appendAll: Bool = false)
     /// Append what a finished `ModelRun` produced (the gate already ran while streaming).
     case applyRun(ModelRun, about: String)
     /// Append lines the user chose (a suggestion, an applied Verify proposal, an imported `.mm`).
@@ -315,8 +316,9 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
         guard !canon.isEmpty, Int(label.lowercased().replacingOccurrences(of: "speaker ", with: "")) != nil else { break }
         state.addItem(SpeakerMap.clarification(label: label, name: canon), kind: .clarification, now: now)
 
-    case .applyModelOutput(let output, let prompt, let textID, let about):
-        let result = Gate.run(output, graph: state.graph, evidence: state.proofEvidence, options: GateOptions(prompt: prompt, textID: textID, aliases: state.aliases))
+    case .applyModelOutput(let output, let prompt, let textID, let about, let appendAll):
+        let options = appendAll ? GateOptions.appendAll(prompt: prompt, textID: textID, aliases: state.aliases) : GateOptions(prompt: prompt, textID: textID, aliases: state.aliases)
+        let result = Gate.run(output, graph: state.graph, evidence: state.proofEvidence, options: options)
         state.heldBack = result.events
         state.suggestions = result.deferred
         state.appendTurn(who: "model", what: "\(prompt.rawValue) \(about)", lines: result.lines, now: now)

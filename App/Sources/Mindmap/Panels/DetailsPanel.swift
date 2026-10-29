@@ -38,10 +38,19 @@ struct NodeDetails: View {
         let name = node.id.name
         let kind = node.note(kind: "kind")
         let src = node.note(kind: "src")
-        let symbol = session.symbol(for: node)
+        let symbols = Array(session.symbols(for: node).prefix(MapLayout.Metrics.maxIcons))
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(alignment: .center, spacing: Theme.Space.s) {
-                Image(systemName: symbol).font(.system(size: Theme.Map.iconSize)).foregroundStyle(Theme.kind(kind)).frame(width: 36)
+                // Its icons stacked as on the map, the first on top.
+                HStack(spacing: -12) {
+                    ForEach(Array(symbols.enumerated()), id: \.offset) { i, symbol in
+                        Image(systemName: symbol).font(.system(size: Theme.Map.iconSize)).foregroundStyle(Theme.kind(kind))
+                            .frame(width: 32, height: 32)
+                            .background { if symbols.count > 1 { Circle().fill(.background) } }
+                            .zIndex(Double(symbols.count - i))
+                    }
+                }
+                .frame(minWidth: 36)
                 Text(name).font(Theme.title).lineLimit(3).textSelection(.enabled)
             }
             HStack(spacing: Theme.Space.xs) {

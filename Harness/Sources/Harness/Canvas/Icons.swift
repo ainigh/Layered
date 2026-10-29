@@ -89,6 +89,8 @@ public struct IconLibrary: Equatable, Sendable {
         "them", "then", "there", "these", "they", "this", "those", "to", "too", "up", "us", "was", "we",
         "were", "what", "when", "where", "which", "who", "why", "will", "with", "you", "your", "all", "any",
         "some", "more", "most", "other", "such", "only", "own", "same", "very", "just", "also", "new", "old",
+        "about", "after", "before", "over", "under", "between", "through", "during", "via", "per", "how",
+        "each", "every", "here", "again", "both", "few", "many", "much", "should", "would", "could",
         "fill", "filled", "circle", "square", "badge", "slash", "left", "right", "top", "bottom", "half",
     ]
 

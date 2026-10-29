@@ -491,16 +491,39 @@ struct CanvasView: View {
         let cx = p.x + p.w / 2
         let iconY = p.y + p.anchorY
         let ink = kind == nil ? Theme.Map.branch(p.branch) ?? Theme.Map.secondary : Theme.kind(kind)
-        ctx.draw(Text(Image(systemName: session.symbol(for: node))).font(Theme.Map.icon).foregroundStyle(ink), at: CGPoint(x: cx, y: iconY), anchor: .center)
+        let symbols = session.symbols(for: node)
+        let stack = M.iconStack(symbols.count)
+        drawStack(symbols, from: cx - stack / 2 + M.iconBox / 2, y: iconY, step: M.iconStep, disc: M.iconBox - 2,
+                  font: Theme.Map.icon, ink: ink, behind: Theme.Map.background, in: &ctx)
+        if symbols.count > M.maxIcons {
+            ctx.draw(Text("+\(symbols.count - M.maxIcons)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.Map.secondary),
+                     at: CGPoint(x: cx + stack / 2 - M.moreIcons / 2, y: iconY), anchor: .center)
+        }
         if p.badge, let badge = Theme.provenance(node.note(kind: "src")).badge {
             ctx.draw(Text(Image(systemName: badge)).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.Map.tertiary),
-                     at: CGPoint(x: cx + M.iconBox / 2 + 3, y: iconY - M.iconLine / 2 + 5), anchor: .center)
+                     at: CGPoint(x: cx + stack / 2 + 3, y: iconY - M.iconLine / 2 + 5), anchor: .center)
         }
         let nameY = p.y + M.openPadY + M.iconLine + M.iconGap + M.nameLine / 2
         ctx.draw(Text(p.name).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary), at: CGPoint(x: cx, y: nameY), anchor: .center)
         for (i, note) in p.notes.enumerated() {
             let y = nameY + M.nameLine / 2 + (Double(i) + 0.5) * M.noteLine
             ctx.draw(noteText(note), at: CGPoint(x: cx, y: y), anchor: .center)
+        }
+    }
+
+    /// A node's icons side by side, each overlapping the next and drawn over it (the first on
+    /// top), on a disc of what is behind so the one under it is hidden there and a part of
+    /// each shows. Up to `maxIcons`; one icon is drawn as it always was, with no disc.
+    private func drawStack(_ symbols: [String], from x: Double, y: Double, step: Double, disc: Double,
+                           font: Font, ink: Color, behind: Color, in ctx: inout GraphicsContext) {
+        typealias M = MapLayout.Metrics
+        let shown = Array(symbols.prefix(M.maxIcons))
+        for (i, symbol) in shown.enumerated().reversed() {
+            let center = CGPoint(x: x + Double(i) * step, y: y)
+            if shown.count > 1 {
+                ctx.fill(Path(ellipseIn: CGRect(x: center.x - disc / 2, y: center.y - disc / 2, width: disc, height: disc)), with: .color(behind))
+            }
+            ctx.draw(Text(Image(systemName: symbol)).font(font).foregroundStyle(ink), at: center, anchor: .center)
         }
     }
 
@@ -522,9 +545,10 @@ struct CanvasView: View {
         var x = p.x + M.padX
         if p.glyph {
             let kind = node.note(kind: "kind")
-            ctx.draw(Text(Image(systemName: session.symbol(for: node))).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.kind(kind)),
-                     at: CGPoint(x: x + 6, y: nameY), anchor: .center)
-            x += M.glyph
+            let symbols = Array(session.symbols(for: node).prefix(M.maxIcons))
+            drawStack(symbols, from: x + 6, y: nameY, step: M.glyphStep, disc: 14,
+                      font: .system(size: 10.5, weight: .semibold), ink: Theme.kind(kind), behind: colours.fill, in: &ctx)
+            x += M.glyphRoom(symbols.count)
         }
         ctx.draw(Text(p.name).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary), at: CGPoint(x: x, y: nameY), anchor: .leading)
         if p.badge, let badge = style.badge {

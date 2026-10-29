@@ -107,6 +107,9 @@ struct ContextRow: View {
                                 .disabled(item.isOnMap || busy)
                         }
                         MapToolButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open over the map") { session.open(item: item.id) }
+                        MapToolButton(symbol: "trash", help: "Delete: it leaves the list and the context; its ideas stay on the map. Restore it from the deleted items at the top") {
+                            withAnimation(Theme.slide) { session.dispatch(.removeContext(item.id)) }
+                        }
                     }
                 }
                 if let q = item.question {

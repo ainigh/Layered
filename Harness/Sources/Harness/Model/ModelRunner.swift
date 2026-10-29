@@ -51,10 +51,11 @@ public struct ModelRunner: Sendable {
     }
 
     /// The prompt text for a kind, without running it (shown in the Prompt panel, used by tests).
+    /// The context is the selected items unless `texts` names others.
     public func prompt(_ kind: PromptKind, state: MapState, item: String, contextOnly: Bool = false, texts: [Int]? = nil) -> String {
         prompts.render(kind,
                        map: contextOnly ? "" : state.canonical,
-                       context: ContextRenderer.numbered(state.evidence, texts: texts),
+                       context: ContextRenderer.numbered(state.evidence, texts: texts ?? state.modelTexts, replies: state.context.replyTexts),
                        nodes: state.graph.rootNames,
                        item: item)
     }
@@ -68,7 +69,7 @@ public struct ModelRunner: Sendable {
         var request = ModelRequest(model: model, prompt: prompt(kind, state: state, item: item, contextOnly: contextOnly, texts: texts),
                                    grammar: grammar, temperature: settings.temperature, contextSize: settings.contextSize)
 
-        var session = GateSession(gate: Gate(options: GateOptions(prompt: kind, textID: textID, aliases: aliases)), graph: state.graph, evidence: state.evidence)
+        var session = GateSession(gate: Gate(options: GateOptions(prompt: kind, textID: textID, aliases: aliases)), graph: state.graph, evidence: state.proofEvidence)
         var raw = ""
         var promptTokens: Int?
         var responseTokens: Int?

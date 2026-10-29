@@ -98,31 +98,44 @@ public enum Export {
             guard let node = graph.nodes[n.id] else { continue }
             let src = node.note(kind: "src") ?? "text"
             let isRoot = n.depth == 0
-            let ink = palette.hue(n.branch)?.ink
-            let fill = isRoot ? palette.root : (src == "advice" ? palette.advice : palette.card)
-            var stroke = isRoot ? "stroke=\"none\"" : "stroke=\"\(ink ?? palette.outline)\" stroke-width=\"\(ink == nil ? 1 : 1.5)\""
-            if src == "world" { stroke += " stroke-dasharray=\"5 4\"" } else if src == "guess" { stroke += " stroke-dasharray=\"2 3\"" }
-            out.append("<g class=\"node\" transform=\"translate(\(fmt(n.x)) \(fmt(n.y)))\"\(src == "guess" ? " opacity=\"0.7\"" : "")>")
-            out.append("<rect width=\"\(fmt(n.w))\" height=\"\(fmt(n.h))\" rx=\"8\" fill=\"\(fill)\" \(stroke)/>")
-            if src == "advice" {
-                out.append("<rect x=\"3\" y=\"3\" width=\"\(fmt(n.w - 6))\" height=\"\(fmt(n.h - 6))\" rx=\"5\" fill=\"none\" stroke=\"\(ink ?? palette.outline)\" stroke-width=\"1\"/>")
-            }
-            var textX = M.padX
-            let nameY = M.padY + M.nameLine / 2
-            if n.glyph {
-                out.append("<circle cx=\"\(fmt(textX + 5))\" cy=\"\(fmt(nameY))\" r=\"4.5\" fill=\"\(kindColour(node.note(kind: "kind")))\"/>")
-                textX += M.glyph
-            }
-            let primary = isRoot ? palette.onRoot : palette.textPrimary
-            let secondary = isRoot ? palette.onRoot : palette.textSecondary
-            out.append("<text x=\"\(fmt(textX))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" font-size=\"13\" font-weight=\"500\" fill=\"\(primary)\">\(escape(n.name))</text>")
-            if n.badge {
-                let mark = ["world": "◎", "guess": "?", "advice": "✦", "user": "✎"][src] ?? ""
-                out.append("<text x=\"\(fmt(n.w - M.padX - M.badge / 2 + 3))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11\" fill=\"\(secondary)\">\(mark)</text>")
-            }
-            for (i, note) in n.notes.enumerated() {
-                let y = M.padY + M.nameLine + Double(i) * M.noteLine + M.noteLine / 2
-                out.append("<text x=\"\(fmt(M.padX))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" font-size=\"11.5\" font-weight=\"500\" fill=\"\(secondary)\">\(escape(note))</text>")
+            let weight = isRoot ? "600" : "500"
+            out.append("<g class=\"node\" transform=\"translate(\(fmt(n.x)) \(fmt(n.y)))\"\(src == "guess" ? " opacity=\"0.75\"" : "")>")
+            if n.boxed {
+                // The model's extras: a card in its provenance's colours.
+                let (fill, ink) = src == "world" ? (palette.world, palette.worldInk) : src == "advice" ? (palette.advice, palette.adviceInk) : (palette.guess, palette.guessInk)
+                var stroke = "stroke=\"\(ink)\" stroke-width=\"1.5\""
+                if src == "world" { stroke += " stroke-dasharray=\"5 4\"" } else if src == "guess" { stroke += " stroke-dasharray=\"2 3\"" }
+                out.append("<rect width=\"\(fmt(n.w))\" height=\"\(fmt(n.h))\" rx=\"8\" fill=\"\(fill)\" \(stroke)/>")
+                if src == "advice" {
+                    out.append("<rect x=\"3\" y=\"3\" width=\"\(fmt(n.w - 6))\" height=\"\(fmt(n.h - 6))\" rx=\"5\" fill=\"none\" stroke=\"\(ink)\" stroke-width=\"1\"/>")
+                }
+                var textX = M.padX
+                let nameY = M.padY + M.nameLine / 2
+                if n.glyph {
+                    out.append("<circle cx=\"\(fmt(textX + 5))\" cy=\"\(fmt(nameY))\" r=\"4.5\" fill=\"\(kindColour(node.note(kind: "kind")))\"/>")
+                    textX += M.glyph
+                }
+                out.append("<text x=\"\(fmt(textX))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" font-size=\"13\" font-weight=\"\(weight)\" fill=\"\(palette.textPrimary)\">\(escape(n.name))</text>")
+                if n.badge {
+                    let mark = ["world": "◎", "guess": "?", "advice": "✦"][src] ?? ""
+                    out.append("<text x=\"\(fmt(n.w - M.padX - M.badge / 2 + 3))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11\" fill=\"\(ink)\">\(mark)</text>")
+                }
+                for (i, note) in n.notes.enumerated() {
+                    let y = M.padY + M.nameLine + Double(i) * M.noteLine + M.noteLine / 2
+                    out.append("<text x=\"\(fmt(M.padX))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" font-size=\"11.5\" font-weight=\"500\" fill=\"\(palette.textSecondary)\">\(escape(note))</text>")
+                }
+            } else {
+                // From the context or the user: the icon (here the kind's dot) above the name, no card.
+                let cx = n.w / 2
+                let iconY = M.openPadY + M.iconLine / 2
+                out.append("<circle cx=\"\(fmt(cx))\" cy=\"\(fmt(iconY))\" r=\"10\" fill=\"\(kindColour(node.note(kind: "kind")))\"/>")
+                if n.badge { out.append("<text x=\"\(fmt(cx + 15))\" y=\"\(fmt(iconY - 9))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"10\" fill=\"\(palette.textTertiary)\">✎</text>") }
+                let nameY = M.openPadY + M.iconLine + M.iconGap + M.nameLine / 2
+                out.append("<text x=\"\(fmt(cx))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"\(weight)\" fill=\"\(palette.textPrimary)\">\(escape(n.name))</text>")
+                for (i, note) in n.notes.enumerated() {
+                    let y = nameY + M.nameLine / 2 + Double(i) * M.noteLine + M.noteLine / 2
+                    out.append("<text x=\"\(fmt(cx))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11.5\" font-weight=\"500\" fill=\"\(palette.textSecondary)\">\(escape(note))</text>")
+                }
             }
             out.append("</g>")
         }
@@ -132,9 +145,9 @@ public enum Export {
             let lines = [e.label, e.note].filter { !$0.isEmpty }
             for (i, line) in lines.enumerated() {
                 let y = e.labelAt.y + (Double(i) - Double(lines.count - 1) / 2) * M.labelLine
-                let colour = i == 0 && !e.label.isEmpty ? palette.textPrimary : palette.textSecondary
+                let colour = i == 0 && !e.label.isEmpty ? palette.textSecondary : palette.textTertiary
                 let style = e.tree ? "" : " font-style=\"italic\""
-                out.append("<text x=\"\(fmt(e.labelAt.x))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11.5\" font-weight=\"500\"\(style) fill=\"\(colour)\" paint-order=\"stroke\" stroke=\"\(palette.background)\" stroke-width=\"4\" stroke-linejoin=\"round\">\(escape(line))</text>")
+                out.append("<text x=\"\(fmt(e.labelAt.x))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"10.5\" font-weight=\"500\"\(style) fill=\"\(colour)\" paint-order=\"stroke\" stroke=\"\(palette.background)\" stroke-width=\"4\" stroke-linejoin=\"round\">\(escape(line))</text>")
             }
         }
         out.append("</svg>")

@@ -108,9 +108,10 @@ public struct SpeakerMap: Equatable, Sendable {
         self.names = names
     }
 
+    /// From the clarification items still in the list, latest wording.
     public init(context: ContextDocument) {
-        for p in context.paragraphs(ofKind: .clarification) {
-            if let (label, name) = SpeakerMap.parse(p.body) { names[label] = name }
+        for item in context.items where item.kind == .clarification && !item.removed {
+            if let (label, name) = SpeakerMap.parse(item.body) { names[label] = name }
         }
     }
 

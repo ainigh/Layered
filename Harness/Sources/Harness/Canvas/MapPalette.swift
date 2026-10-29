@@ -21,8 +21,14 @@ public struct MapPalette: Equatable, Sendable {
     public let textPrimary: String
     public let textSecondary: String
     public let textTertiary: String
-    /// The warm fill `advice` nodes get.
+    /// The cards of the model's extras: a fill and an outline each, so world knowledge,
+    /// guesses and advice read apart at a glance.
+    public let world: String
+    public let worldInk: String
+    public let guess: String
+    public let guessInk: String
     public let advice: String
+    public let adviceInk: String
 
     /// Branch `n` (1-based, wrapping after ten); nil for roots and cross-links (0).
     public func hue(_ branch: Int) -> Hue? {
@@ -40,7 +46,8 @@ public struct MapPalette: Equatable, Sendable {
         background: "#f4f5f8", dot: "#d3d6dd", card: "#ffffff", outline: "#d0d3da",
         root: "#232835", onRoot: "#ffffff",
         textPrimary: "#151821", textSecondary: "#454c5c", textTertiary: "#6b7282",
-        advice: "#fdf1dc")
+        world: "#e3edfb", worldInk: "#3d6fc4", guess: "#eef0f3", guessInk: "#8a909c",
+        advice: "#fdf1dc", adviceInk: "#b7791f")
 
     public static let dark = MapPalette(
         hues: [
@@ -53,5 +60,6 @@ public struct MapPalette: Equatable, Sendable {
         background: "#16181d", dot: "#2e313a", card: "#2a2d35", outline: "#41454f",
         root: "#e9ebf0", onRoot: "#151821",
         textPrimary: "#f3f4f7", textSecondary: "#c0c5d0", textTertiary: "#9aa1ae",
-        advice: "#3a2c14")
+        world: "#172338", worldInk: "#8db4ff", guess: "#25272d", guessInk: "#7d8493",
+        advice: "#3a2c14", adviceInk: "#f2b75a")
 }

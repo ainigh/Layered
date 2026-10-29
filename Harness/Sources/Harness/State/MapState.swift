@@ -145,6 +145,22 @@ public struct MapState: Equatable, Sendable {
     /// Aliases for the gate's proof check.
     public var aliases: [String: [String]] { speakers.aliases }
 
+    /// The texts a model request reads: the selected context items. `nil` (every text) for
+    /// a state with no context, as tests and imported evidence have.
+    public var modelTexts: [Int]? {
+        context.paragraphs.isEmpty ? nil : context.selectedTexts
+    }
+
+    /// The evidence the gate may cite as proof: everything but the model's own replies, so
+    /// a reply the user selected can inform a request but never make a line `src text`.
+    public var proofEvidence: EvidenceStore {
+        let replies = context.replyTexts
+        guard !replies.isEmpty else { return evidence }
+        var store = EvidenceStore()
+        for s in evidence.sentences where !replies.contains(s.text) { store.append(s) }
+        return store
+    }
+
     // MARK: - Appending
 
     /// Appends a turn: the header, then each line, compiling as it goes. Lines that
@@ -177,6 +193,15 @@ public struct MapState: Equatable, Sendable {
         recordStacks(turn)
     }
 
+    /// A new context item: its text in the evidence store under a new text id, then in the context.
+    mutating func addItem(_ text: String, kind: ContextParagraph.Kind, question: String? = nil, now: Date) {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        let (id, _) = evidence.appendText(body)
+        texts[id] = body
+        context.append(ContextParagraph(kind: kind, item: context.nextItemID, textID: id, question: question.flatMap { $0.isEmpty ? nil : $0 }, date: now, body: body))
+    }
+
     /// An undo or redo that would change nothing still moves the turn between the stacks.
     mutating func skipUndo(_ n: Int) { undoable.removeAll { $0 == n }; redoable.append(n) }
     mutating func skipRedo(_ n: Int) { redoable.removeAll { $0 == n }; undoable.append(n) }
@@ -188,10 +213,25 @@ public struct MapState: Equatable, Sendable {
 
 /// Every behaviour of the app is `MapState` + `Action` → `MapState`.
 public enum Action: Equatable, Sendable {
-    /// Append a paragraph to the context and record it in the evidence store under a new text id.
+    /// Add a context item: the text joins the context (selected) and the evidence store under
+    /// a new text id. Nothing reaches the map until Submit extracts it.
     case submitText(String, kind: ContextParagraph.Kind = .pasted)
-    /// A transcript lands in the context with timestamps and speakers, and in the evidence store with times.
+    /// A transcript lands in the context as an item, with timestamps and speakers, and in the evidence store with times.
     case submitTranscript(Transcript)
+    /// The prose of a model reply becomes an item of its own, marked as the model's and not
+    /// selected until the user selects it.
+    case addReply(String, question: String)
+    /// Edit an item: its new text is a new revision (a new text id); the old one stays on
+    /// disk and in the evidence store. Text from audio cannot be edited. Editing a model
+    /// reply makes it the user's.
+    case reviseContext(Int, String)
+    /// Put an item in the current context, or take it out.
+    case selectContext(Int, Bool)
+    /// Delete an item from the list. It stays in `context.md` and can be restored; its ideas stay on the map.
+    case removeContext(Int)
+    case restoreContext(Int)
+    /// A text went through Extract: its item is on the map.
+    case markExtracted(textID: Int)
     /// Answer a Clarify question: appended to the context as a `[clarification]` paragraph.
     case answer(ClarifyQuestion?, String)
     /// Map a speaker label to a name: `Speaker 1 is Ana`, appended as a clarification.
@@ -223,11 +263,7 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
     var state = state
     switch action {
     case .submitText(let text, let kind):
-        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { break }
-        let (id, _) = state.evidence.appendText(body)
-        state.texts[id] = body
-        state.context.append(ContextParagraph(kind: kind, textID: id, date: now, body: body))
+        state.addItem(text, kind: kind, now: now)
 
     case .submitTranscript(let transcript):
         let id = state.evidence.nextTextID
@@ -236,26 +272,49 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
         for s in sentences { state.evidence.append(s) }
         state.texts[id] = transcript.rendered
         state.transcripts[id] = transcript
-        state.context.append(ContextParagraph(kind: .transcript, textID: id, date: now, body: transcript.rendered))
+        state.context.append(ContextParagraph(kind: .transcript, item: state.context.nextItemID, textID: id, date: now, body: transcript.rendered))
+
+    case .addReply(let text, let question):
+        state.addItem(text, kind: .model, question: Text.collapse(question), now: now)
+
+    case .reviseContext(let n, let text):
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let item = state.context.item(n), item.isEditable, !item.removed, !body.isEmpty, body != item.body else { break }
+        let (id, _) = state.evidence.appendText(body)
+        state.texts[id] = body
+        let kind: ContextParagraph.Kind = item.kind == .model ? .typed : item.kind
+        state.context.append(ContextParagraph(kind: kind, item: n, textID: id, question: item.question, date: now, body: body))
+        if item.kind == .model, !item.selected { state.context.append(ContextParagraph(kind: kind, item: n, event: .selected, date: now, body: "")) }
+
+    case .selectContext(let n, let on):
+        guard let item = state.context.item(n), item.selected != on else { break }
+        state.context.append(ContextParagraph(kind: item.kind, item: n, event: on ? .selected : .deselected, date: now, body: ""))
+
+    case .removeContext(let n):
+        guard let item = state.context.item(n), !item.removed else { break }
+        state.context.append(ContextParagraph(kind: item.kind, item: n, event: .removed, date: now, body: ""))
+
+    case .restoreContext(let n):
+        guard let item = state.context.item(n), item.removed else { break }
+        state.context.append(ContextParagraph(kind: item.kind, item: n, event: .restored, date: now, body: ""))
+
+    case .markExtracted(let textID):
+        guard let item = state.context.item(forText: textID), !item.extracted.contains(textID) else { break }
+        state.context.append(ContextParagraph(kind: item.kind, item: item.id, textID: textID, event: .extracted, date: now, body: ""))
 
     case .answer(let question, let answer):
         let body = Text.collapse(answer)
         guard !body.isEmpty else { break }
         let full = question.map { "\(body) (s\($0.sentence): \($0.question))" } ?? body
-        let (id, _) = state.evidence.appendText(full)
-        state.texts[id] = full
-        state.context.append(ContextParagraph(kind: .clarification, textID: id, date: now, body: full))
+        state.addItem(full, kind: .clarification, now: now)
 
     case .nameSpeaker(let label, let name):
         let canon = Canonicaliser.canonical(name)
         guard !canon.isEmpty, Int(label.lowercased().replacingOccurrences(of: "speaker ", with: "")) != nil else { break }
-        let body = SpeakerMap.clarification(label: label, name: canon)
-        let (id, _) = state.evidence.appendText(body)
-        state.texts[id] = body
-        state.context.append(ContextParagraph(kind: .clarification, textID: id, date: now, body: body))
+        state.addItem(SpeakerMap.clarification(label: label, name: canon), kind: .clarification, now: now)
 
     case .applyModelOutput(let output, let prompt, let textID, let about):
-        let result = Gate.run(output, graph: state.graph, evidence: state.evidence, options: GateOptions(prompt: prompt, textID: textID, aliases: state.aliases))
+        let result = Gate.run(output, graph: state.graph, evidence: state.proofEvidence, options: GateOptions(prompt: prompt, textID: textID, aliases: state.aliases))
         state.heldBack = result.events
         state.suggestions = result.deferred
         state.appendTurn(who: "model", what: "\(prompt.rawValue) \(about)", lines: result.lines, now: now)

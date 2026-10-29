@@ -117,9 +117,12 @@ public struct Coverage: Equatable, Sendable {
         for edge in state.graph.edges.values {
             for note in edge.notes { if let id = proof(note) { covered.insert(id); supported.formUnion([edge.a, edge.b]) } }
         }
+        // Sentences of the current context, the model's replies aside: they are not facts to cover.
+        let scope = state.modelTexts.map(Set.init)
+        let replies = state.context.replyTexts
         return Coverage(
             unsupportedNodes: state.graph.nodes.keys.filter { $0.scope.isEmpty && !supported.contains($0) }.map(\.name).sorted(),
-            uncoveredSentences: state.evidence.sentences.map(\.id).filter { !covered.contains($0) })
+            uncoveredSentences: state.evidence.sentences.filter { (scope?.contains($0.text) ?? true) && !replies.contains($0.text) }.map(\.id).filter { !covered.contains($0) })
     }
 
     static func proof(_ note: String) -> SentenceID? {
@@ -156,6 +159,14 @@ public enum Proof {
         return byID.keys.sorted().compactMap { id in
             guard let sentence = state.evidence.sentence(id) else { return nil }
             return ProofEntry(sentence: sentence, nodes: byID[id]!.sorted())
+        }
+    }
+
+    /// The sentences behind one edge.
+    public static func entries(forEdge key: EdgeKey, in state: MapState) -> [ProofEntry] {
+        guard let edge = state.graph.edges[key] else { return [] }
+        return edge.notes.compactMap(Coverage.proof).sorted().compactMap { id in
+            state.evidence.sentence(id).map { ProofEntry(sentence: $0, nodes: [edge.a.name, edge.b.name]) }
         }
     }
 

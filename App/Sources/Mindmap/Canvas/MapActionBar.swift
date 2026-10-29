@@ -1,12 +1,13 @@
 import SwiftUI
 import Harness
 
-/// The map's actions, floating at its top: Check coverage, Ask me, and a box to ask the
-/// model or tell it what to add (items go on the map from their own send button in
-/// Context). What the model adds goes on the map at once, flagged for review (✓ keeps it,
-/// ✕ deletes it); what it says back as text joins the context as a model item, and a note
-/// under the bar says so. What the model is working on shows at the bottom (`CaptureBar`).
-/// Nothing opens over the map unless something went wrong.
+/// The map's actions, floating at its top: Check coverage, Ask me, a box to ask the model
+/// or tell it what to add (items go on the map from their own send button in Context), and
+/// two toggles, lit while on: one sentence at a time, and Ask me reads the context only.
+/// What the model adds goes on the map at once, flagged for review (✓ keeps it, ✕ deletes
+/// it); what it says back as text joins the context as a model item, and a note under the
+/// bar says so. What the model is working on shows in the status bar. Nothing opens over
+/// the map unless something went wrong.
 struct MapActionBar: View {
     @Bindable var session: MapSession
     @State private var message = ""
@@ -31,18 +32,13 @@ struct MapActionBar: View {
                     MapToolButton(symbol: "paperplane.fill", help: "Send (↩)") { send(busy: busy) }
                         .disabled(message.trimmingCharacters(in: .whitespaces).isEmpty || busy)
                 }
-                Menu {
-                    Toggle("Submit one sentence at a time", isOn: $session.sentenceMode)
-                    Toggle("Ask me reads the context only", isOn: $session.clarifyContextOnly)
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, Theme.Space.xs)
-                .help("Options")
+                Divider().frame(height: 18).padding(.horizontal, 2)
+                MapToolButton(symbol: "list.number",
+                              help: session.sentenceMode ? "One sentence at a time: on. Items go on the map sentence by sentence (click to send all at once)" : "One sentence at a time: off. Items go on the map all at once (click to go sentence by sentence)",
+                              pressed: session.sentenceMode) { withAnimation(Theme.selection) { session.sentenceMode.toggle() } }
+                MapToolButton(symbol: "doc.text.magnifyingglass",
+                              help: session.clarifyContextOnly ? "Ask me reads the context only: on (click to let it read the map too)" : "Ask me reads the context only: off. It reads the map too (click to read the context only)",
+                              pressed: session.clarifyContextOnly) { withAnimation(Theme.selection) { session.clarifyContextOnly.toggle() } }
             }
             .padding(.leading, Theme.Space.xs)
             .padding(.trailing, Theme.Space.xs)
@@ -67,30 +63,6 @@ struct MapActionBar: View {
         guard !busy, !message.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         session.ask(message)
         message = ""
-    }
-}
-
-/// What the model is working on, for how long, and a way to stop it when it takes too long.
-struct RunProgress: View {
-    @Bindable var session: MapSession
-    let kind: PromptKind
-
-    var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            ProgressView().controlSize(.small)
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let seconds = session.runningSince.map { max(0, Int(context.date.timeIntervalSince($0))) } ?? 0
-                Text("\(kind.rawValue.capitalized) · \(seconds / 60):\(String(format: "%02d", seconds % 60)) · ~\(session.runningTokens) tokens")
-                    .font(Theme.caption).foregroundStyle(.secondary).monospacedDigit()
-            }
-            Button { session.stop() } label: { Label("Stop", systemImage: "stop.fill") }
-                .controlSize(.small)
-                .keyboardShortcut(".", modifiers: .command)
-                .disabled(session.cancelRun == nil)
-                .help("Stop the model; what it sent so far is dropped (⌘.)")
-        }
-        .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.xs).padding(.vertical, Theme.Space.xs)
-        .floatingBar(in: Capsule())
     }
 }
 
@@ -159,34 +131,6 @@ struct ErrorNote: View {
                 .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
         }
         .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.s).padding(.vertical, Theme.Space.s)
-        .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
-    }
-}
-
-/// One sentence at a time: the sentence under consideration, how far along, pause.
-struct WalkProgress: View {
-    @Bindable var session: MapSession
-    let walk: SentenceWalk
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            HStack(spacing: Theme.Space.s) {
-                ProgressView(value: walk.progress).frame(width: 140)
-                Text("\(walk.index + 1) of \(walk.sentences.count)").font(Theme.caption).foregroundStyle(.secondary).monospacedDigit()
-                Button(walk.paused ? "Resume" : "Pause") {
-                    session.sentenceWalk?.paused.toggle()
-                    if session.sentenceWalk?.paused == false { Task { await session.walkSentences() } }
-                }
-                .controlSize(.small)
-                if walk.paused {
-                    Button("Stop") { session.sentenceWalk = nil }.controlSize(.small)
-                        .help("Stop here; what is not done stays waiting to be submitted")
-                }
-            }
-            if let s = walk.current { Text(s.sentence).font(Theme.caption).foregroundStyle(.secondary).lineLimit(2) }
-        }
-        .frame(maxWidth: 420, alignment: .leading)
-        .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
         .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
     }
 }

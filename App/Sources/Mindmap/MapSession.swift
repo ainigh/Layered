@@ -41,6 +41,8 @@ final class MapSession {
     /// Recording from the microphone, plain or live.
     var recording: Recording?
     @ObservationIgnored private var recorder: LiveRecorder?
+    /// The live map's own Extract is running (so Stop now can cancel it).
+    @ObservationIgnored private var liveExtracting = false
     /// How loud the microphone is now, 0 to 1 (read on a timer, not observed).
     var recordingLevel: Float { recorder?.level ?? 0 }
     /// Recordings this session added, by text id (a demo keeps them where they were dropped).
@@ -342,8 +344,19 @@ final class MapSession {
     }
 
     /// Stops the recording. A plain one is then transcribed; a live one finishes what it heard.
+    /// Pressed again while a live one finishes, it stops now: whatever it was doing (a model
+    /// download, a piece being transcribed, the model) is let go, what is not on the map yet
+    /// stays in the recording, and the recording is kept as it is.
     func stopRecording() {
-        guard let recorder, let rec = recording, !rec.stopping else { return }
+        guard let recorder, let rec = recording, !rec.cancelled else { return }
+        if rec.stopping {
+            guard rec.live else { return }
+            recording?.cancelled = true
+            if liveExtracting { cancelRun?() }
+            // The live loop sees this recording is over when its current step returns, and leaves.
+            finishLive(recorder)
+            return
+        }
         recorder.stop()
         recording?.stopping = true
         guard !rec.live else { return }
@@ -359,15 +372,20 @@ final class MapSession {
     private func transcribeLive(_ recorder: LiveRecorder) async {
         let rate = LiveRecorder.rate
         var cursor = 0
+        // Still this recording's loop, and not stopped now? After every wait it checks.
+        let mine = recording?.id
+        func going() -> Bool { recording?.id == mine && recording?.cancelled != true }
         do {
             let model = settings.whisperModel
             let modelURL = try await WhisperModels.ensure(model) { [weak self] f in
                 Task { @MainActor in self?.recording?.status = "Downloading the whisper model \(model)" + (f.map { " · \(Int($0 * 100))%" } ?? "…") }
             }
+            guard going() else { return }
             recording?.status = "Getting whisper ready…"
             let whisper = try await Task.detached(priority: .userInitiated) { try WhisperSession(modelURL: modelURL) }.value
+            guard going() else { return }
             recording?.status = "Listening…"
-            while true {
+            while going() {
                 let stopped = recorder.stopped
                 let available = recorder.sampleCount
                 if !stopped, available - cursor < Self.liveChunk * rate {
@@ -383,17 +401,20 @@ final class MapSession {
                 if samples.count >= rate / 2, LiveRecorder.rms(samples) > 0.004 {
                     recording?.status = "Transcribing…"
                     let heard = try await Task.detached(priority: .userInitiated) { try whisper.transcribe(samples) }.value
+                    guard going() else { return }
                     let transcript = Self.placed(heard, at: offset)
-                    if !transcript.segments.isEmpty { await addLive(transcript) }
+                    if !transcript.segments.isEmpty { await addLive(transcript, going: going) }
+                    guard going() else { return }
                 }
                 if stopped, cursor >= recorder.sampleCount { break }
-                recording?.status = recorder.stopped ? "Finishing…" : "Listening…"
+                recording?.status = recorder.stopped ? "Transcribing the last words…" : "Listening…"
             }
         } catch {
+            guard going() else { return }
             recorder.stop()
             recording?.problem = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
         }
-        finishLive(recorder)
+        if going() { finishLive(recorder) }
     }
 
     /// A piece of a live recording, timed from the recording's start, without what whisper
@@ -410,20 +431,28 @@ final class MapSession {
     }
 
     /// What a live recording heard becomes an item, and goes on the map once the model is free.
-    private func addLive(_ transcript: Transcript) async {
+    private func addLive(_ transcript: Transcript, going: () -> Bool) async {
         let id = state.evidence.nextTextID
         dispatch(.submitTranscript(transcript))
         guard state.context.item(forText: id) != nil else { return }
         recording?.texts.append(id)
         recording?.heard.append(contentsOf: transcript.segments.map(\.text))
-        recording?.status = "Putting it on the map…"
-        while running != nil || sentenceWalk != nil { try? await Task.sleep(for: .milliseconds(300)) }
-        // Read again: the user may have deselected or deleted it meanwhile.
-        guard let item = state.context.item(forText: id), item.isPending else { return }
-        let request = Submit.request(for: item)
-        if !request.isEmpty, await run(.extract, item: request, textID: id, about: "text \(id)") != nil {
-            dispatch(.markExtracted(textID: id))
+        // The model takes one request at a time: wait for the one under way (a paused
+        // sentence walk is not one), unless the user stops the live map now.
+        while running != nil || sentenceWalk?.paused == false {
+            guard going() else { return }
+            recording?.status = "Waiting for the model…"
+            try? await Task.sleep(for: .milliseconds(300))
         }
+        // Read again: the user may have deselected or deleted it meanwhile.
+        guard going(), let item = state.context.item(forText: id), item.isPending else { return }
+        let request = Submit.request(for: item)
+        guard !request.isEmpty else { return }
+        recording?.status = "Putting it on the map…"
+        liveExtracting = true
+        let done = await run(.extract, item: request, textID: id, about: "text \(id)") != nil
+        liveExtracting = false
+        if done { dispatch(.markExtracted(textID: id)) }
     }
 
     /// The live recording is over: its file is kept in the folder once, under every item it
@@ -444,11 +473,14 @@ final class MapSession {
             }
         }
         let problem = recording?.problem
+        let cut = recording?.cancelled == true
         recording = nil
         self.recorder = nil
         let said: String
         if let problem {
             said = "The live map stopped: " + problem
+        } else if cut {
+            said = "The live map stopped. What it heard is in Context; anything not on the map yet waits for its send button."
         } else if ids.isEmpty {
             said = "The live map heard no speech."
         } else {
@@ -698,6 +730,8 @@ enum Overlay: Equatable {
 
 /// A recording from the microphone under way.
 struct Recording: Equatable {
+    /// Which recording it is, so a live loop still running for one that ended leaves it alone.
+    let id = UUID()
     /// Live: transcribed as it goes, each piece added and put on the map. Otherwise
     /// transcribed when it stops, as a dropped file is.
     let live: Bool
@@ -708,6 +742,8 @@ struct Recording: Equatable {
     var heard: [String] = []
     var texts: [Int] = []
     var stopping = false
+    /// Stop now was pressed while it finished: what is left is dropped.
+    var cancelled = false
     var problem: String?
 }
 

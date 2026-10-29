@@ -35,6 +35,10 @@ public struct MapLayout: Equatable, Sendable {
         public static let badge = 18.0
         /// Node text is cut with an ellipsis past this width.
         public static let maxText = 240.0
+        /// A name of more words than this is broken into lines of at most this many, and at
+        /// most `maxNameLines` of them (the last takes what is left, cut to `maxText`).
+        public static let wrapWords = 3
+        public static let maxNameLines = 3
         /// Vertical space between sibling subtrees, and between trees.
         public static let siblingGap = 12.0
         public static let treeGap = 28.0
@@ -84,8 +88,9 @@ public struct MapLayout: Equatable, Sendable {
 
     public struct PlacedNode: Equatable, Sendable {
         public let id: NodeID
-        /// The name and notes as shown (cut to `maxText`).
-        public let name: String
+        /// The name as shown: broken into lines past `wrapWords` words, each cut to `maxText`.
+        public let nameLines: [String]
+        /// The notes as shown (each cut to `maxText`).
         public let notes: [String]
         /// Was the name or a note cut, or are notes left out? Then the hover card has it all.
         public let cut: Bool
@@ -108,6 +113,8 @@ public struct MapLayout: Equatable, Sendable {
         public let w: Double
         public let h: Double
 
+        /// The name as shown, on one line.
+        public var name: String { nameLines.joined(separator: " ") }
         public var center: Point { Point(x: x + w / 2, y: y + h / 2) }
         /// Where edges meet the node: this far down from its top, and this far in from its
         /// sides (a card's edges meet its sides at mid-height; an open node's meet its icon).
@@ -256,7 +263,9 @@ public struct MapLayout: Equatable, Sendable {
         var sized: [NodeID: PlacedNode] = [:]
         for id in ids {
             let node = graph.nodes[id]!
-            let shown = fit(id.name, .name, M.maxText, measure)
+            let lines = nameLines(id.name, M.maxText, measure)
+            let nameW = lines.map { measure($0, .name) }.max() ?? 0
+            let nameH = Double(lines.count) * M.nameLine
             let all = shownNotes(node)
             let notes = all.prefix(M.maxNotes).map { fit($0, .note, M.maxText, measure) }
             let boxed = isBoxed(node)
@@ -266,18 +275,18 @@ public struct MapLayout: Equatable, Sendable {
             let pin = node.note(kind: "pos").flatMap(Position.init(noteValue:))
             let w: Double, h: Double
             if boxed {
-                let nameW = measure(shown, .name) + (hasGlyph ? M.glyphRoom(iconCount) : 0) + (hasBadge ? M.badge : 0)
-                let textW = ([nameW] + notes.map { measure($0, .note) }).max()!
+                let rowW = nameW + (hasGlyph ? M.glyphRoom(iconCount) : 0) + (hasBadge ? M.badge : 0)
+                let textW = ([rowW] + notes.map { measure($0, .note) }).max()!
                 w = (textW + 2 * M.padX).rounded(.up)
-                h = M.nameLine + Double(notes.count) * M.noteLine + 2 * M.padY
+                h = nameH + Double(notes.count) * M.noteLine + 2 * M.padY
             } else {
-                let textW = ([M.iconStack(iconCount), measure(shown, .name)] + notes.map { measure($0, .note) }).max()!
+                let textW = ([M.iconStack(iconCount), nameW] + notes.map { measure($0, .note) }).max()!
                 w = (textW + 2 * M.openPadX).rounded(.up)
-                h = M.openPadY + M.iconLine + M.iconGap + M.nameLine + Double(notes.count) * M.noteLine + M.openPadY
+                h = M.openPadY + M.iconLine + M.iconGap + nameH + Double(notes.count) * M.noteLine + M.openPadY
             }
             sized[id] = PlacedNode(
-                id: id, name: shown, notes: notes,
-                cut: shown != id.name || notes.count < all.count || zip(notes, all).contains { $0 != $1 },
+                id: id, nameLines: lines, notes: notes,
+                cut: lines.joined(separator: " ") != Self.words(id.name).joined(separator: " ") || notes.count < all.count || zip(notes, all).contains { $0 != $1 },
                 depth: depth[id] ?? 0, branch: branch[id] ?? 0, glyph: hasGlyph, icons: max(1, iconCount), badge: hasBadge, pinned: pin != nil, boxed: boxed,
                 x: 0, y: 0, w: w, h: h)
         }
@@ -415,6 +424,28 @@ public struct MapLayout: Equatable, Sendable {
     /// Edge notes printed under its label (provenance and proof are drawn another way).
     public static func shownEdgeNotes(_ e: Edge) -> [String] {
         e.notes.filter { NoteKind.split($0).map { !hiddenNoteKinds.contains($0.kind) } ?? !hiddenNoteKinds.contains($0) }
+    }
+
+    private static func words(_ text: String) -> [String] {
+        text.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    /// A name broken into lines of at most `wrapWords` words once it has more, as evenly as
+    /// they go (four words: two and two; five: three and two), at most `maxNameLines` lines
+    /// (the last takes what is left); each line cut to `max` points.
+    static func nameLines(_ name: String, _ max: Double, _ measure: Measure) -> [String] {
+        let parts = Self.words(name)
+        guard parts.count > Metrics.wrapWords else { return [fit(name, .name, max, measure)] }
+        let count = min(Metrics.maxNameLines, (parts.count + Metrics.wrapWords - 1) / Metrics.wrapWords)
+        var lines: [String] = []
+        var rest = parts[...]
+        for i in 0..<count {
+            let even = (rest.count + (count - i) - 1) / (count - i)
+            let take = i == count - 1 ? rest.count : min(Metrics.wrapWords, even)
+            lines.append(rest.prefix(take).joined(separator: " "))
+            rest = rest.dropFirst(take)
+        }
+        return lines.map { fit($0, .name, max, measure) }
     }
 
     /// `text` cut with an ellipsis to fit `max` points.

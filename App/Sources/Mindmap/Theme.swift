@@ -192,3 +192,20 @@ enum Appearance: String, CaseIterable, Identifiable {
         }
     }
 }
+
+extension Theme {
+    /// The colours a node's name can give its icons (`IconTint`): a few distinct system colours,
+    /// which read in light and dark.
+    static func tint(_ tint: IconTint) -> Color {
+        switch tint {
+        case .red: return .red
+        case .orange: return .orange
+        case .yellow: return Color(nsColor: .systemYellow)
+        case .green: return .green
+        case .blue: return .blue
+        case .purple: return .purple
+        case .pink: return .pink
+        case .gray: return .gray
+        }
+    }
+}

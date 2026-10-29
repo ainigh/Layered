@@ -78,8 +78,9 @@ final class MapLayoutTests: XCTestCase {
         XCTAssertFalse(map["plain"]!.badge)
         let cut = map.nodes.first { $0.id.name.hasPrefix("word") }!
         XCTAssertTrue(cut.cut)
-        XCTAssertTrue(cut.name.hasSuffix("…"))
-        XCTAssertLessThanOrEqual(MapLayout.estimate(cut.name, .name), MapLayout.Metrics.maxText)
+        XCTAssertEqual(cut.nameLines.count, MapLayout.Metrics.maxNameLines, "wrapped, then cut")
+        XCTAssertTrue(cut.nameLines.last!.hasSuffix("…"))
+        for line in cut.nameLines { XCTAssertLessThanOrEqual(MapLayout.estimate(line, .name), MapLayout.Metrics.maxText) }
     }
 
     func testPinsKeepTheirPlaceAndMovingReroutes() throws {
@@ -176,5 +177,26 @@ final class MapLayoutTests: XCTestCase {
         let card = MapLayout.compute(graph, glyph: { _ in true }, icons: { _ in 2 })["cart"]!
         XCTAssertEqual(card.icons, 2)
         XCTAssertEqual(card.w, MapLayout.compute(graph, glyph: { _ in true })["cart"]!.w + M.glyphStep, accuracy: 1, "room for the second glyph")
+    }
+
+    func testLongNamesWrapEveryThreeWords() throws {
+        typealias M = MapLayout.Metrics
+        let lines = { (name: String) in MapLayout.nameLines(name, M.maxText, MapLayout.estimate) }
+        XCTAssertEqual(lines("project kickoff meeting"), ["project kickoff meeting"])
+        XCTAssertEqual(lines("quarterly budget review meeting"), ["quarterly budget", "review meeting"])
+        XCTAssertEqual(lines("a b c d e"), ["a b c", "d e"])
+        XCTAssertEqual(lines("a b c d e f g"), ["a b c", "d e", "f g"])
+        XCTAssertEqual(lines("a b c d e f g h i j k"), ["a b c", "d e f", "g h i j k"], "three lines at most; the last takes the rest")
+
+        let graph = try Compiler.compile("| quarterly budget review meeting\n| plan @src world")
+        let map = MapLayout.compute(graph)
+        let open = map["quarterly budget review meeting"]!
+        XCTAssertEqual(open.nameLines, ["quarterly budget", "review meeting"])
+        XCTAssertEqual(open.name, "quarterly budget review meeting")
+        XCTAssertFalse(open.cut, "wrapped, nothing cut")
+        XCTAssertEqual(open.h, M.openPadY + M.iconLine + M.iconGap + 2 * M.nameLine + M.openPadY)
+        let card = try MapLayout.compute(Compiler.compile("| quarterly budget review meeting @src world"))["quarterly budget review meeting"]!
+        XCTAssertEqual(card.h, 2 * M.nameLine + 2 * M.padY)
+        XCTAssertTrue(Export.svg(graph, layout: map).contains(">review meeting<"))
     }
 }

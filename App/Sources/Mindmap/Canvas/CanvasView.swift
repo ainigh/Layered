@@ -385,8 +385,9 @@ struct CanvasView: View {
         }
         if selected {
             let ring = Path(roundedRect: rect.insetBy(dx: -3.5, dy: -3.5), cornerRadius: Theme.Map.corner + 3.5)
-            if !p.boxed { ctx.fill(ring, with: .color(Theme.accent.opacity(0.1))) }
-            ctx.stroke(ring, with: .color(Theme.accent), lineWidth: 2)
+            // A hairline: the tint shows what is selected, the line only edges it.
+            ctx.fill(ring, with: .color(Theme.accent.opacity(0.1)))
+            ctx.stroke(ring, with: .color(Theme.accent), lineWidth: 0.5)
         }
         if session.viewingTurn == nil, session.review.nodes.contains(p.id.name) {
             let ring = Path(roundedRect: rect.insetBy(dx: -6, dy: -6), cornerRadius: Theme.Map.corner + 6)
@@ -490,7 +491,7 @@ struct CanvasView: View {
         let kind = node.note(kind: "kind")
         let cx = p.x + p.w / 2
         let iconY = p.y + p.anchorY
-        let ink = kind == nil ? Theme.Map.branch(p.branch) ?? Theme.Map.secondary : Theme.kind(kind)
+        let ink = IconTint.of(p.id.name).map(Theme.tint) ?? (kind == nil ? Theme.Map.branch(p.branch) ?? Theme.Map.secondary : Theme.kind(kind))
         let symbols = session.symbols(for: node)
         let stack = M.iconStack(symbols.count)
         drawStack(symbols, from: cx - stack / 2 + M.iconBox / 2, y: iconY, step: M.iconStep, disc: M.iconBox - 2,
@@ -504,9 +505,12 @@ struct CanvasView: View {
                      at: CGPoint(x: cx + stack / 2 + 3, y: iconY - M.iconLine / 2 + 5), anchor: .center)
         }
         let nameY = p.y + M.openPadY + M.iconLine + M.iconGap + M.nameLine / 2
-        ctx.draw(Text(p.name).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary), at: CGPoint(x: cx, y: nameY), anchor: .center)
+        for (i, line) in p.nameLines.enumerated() {
+            ctx.draw(Text(line).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary),
+                     at: CGPoint(x: cx, y: nameY + Double(i) * M.nameLine), anchor: .center)
+        }
         for (i, note) in p.notes.enumerated() {
-            let y = nameY + M.nameLine / 2 + (Double(i) + 0.5) * M.noteLine
+            let y = nameY + (Double(p.nameLines.count) - 0.5) * M.nameLine + (Double(i) + 0.5) * M.noteLine
             ctx.draw(noteText(note), at: CGPoint(x: cx, y: y), anchor: .center)
         }
     }
@@ -547,16 +551,20 @@ struct CanvasView: View {
             let kind = node.note(kind: "kind")
             let symbols = Array(session.symbols(for: node).prefix(M.maxIcons))
             drawStack(symbols, from: x + 6, y: nameY, step: M.glyphStep, disc: 14,
-                      font: .system(size: 10.5, weight: .semibold), ink: Theme.kind(kind), behind: colours.fill, in: &ctx)
+                      font: .system(size: 10.5, weight: .semibold), ink: IconTint.of(p.id.name).map(Theme.tint) ?? Theme.kind(kind), behind: colours.fill, in: &ctx)
             x += M.glyphRoom(symbols.count)
         }
-        ctx.draw(Text(p.name).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary), at: CGPoint(x: x, y: nameY), anchor: .leading)
+        // Wrapped lines start where the first does, after the glyphs.
+        for (i, line) in p.nameLines.enumerated() {
+            ctx.draw(Text(line).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary),
+                     at: CGPoint(x: x, y: nameY + Double(i) * M.nameLine), anchor: .leading)
+        }
         if p.badge, let badge = style.badge {
             ctx.draw(Text(Image(systemName: badge)).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(colours.ink),
                      at: CGPoint(x: p.x + p.w - M.padX - M.badge / 2 + 3, y: nameY), anchor: .center)
         }
         for (i, note) in p.notes.enumerated() {
-            let y = p.y + M.padY + M.nameLine + (Double(i) + 0.5) * M.noteLine
+            let y = p.y + M.padY + Double(p.nameLines.count) * M.nameLine + (Double(i) + 0.5) * M.noteLine
             ctx.draw(noteText(note), at: CGPoint(x: p.x + M.padX, y: y), anchor: .leading)
         }
     }

@@ -115,13 +115,15 @@ public enum Export {
                     out.append("<circle cx=\"\(fmt(textX + 5))\" cy=\"\(fmt(nameY))\" r=\"4.5\" fill=\"\(kindColour(node.note(kind: "kind")))\"/>")
                     textX += M.glyph
                 }
-                out.append("<text x=\"\(fmt(textX))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" font-size=\"13\" font-weight=\"\(weight)\" fill=\"\(palette.textPrimary)\">\(escape(n.name))</text>")
+                for (i, line) in n.nameLines.enumerated() {
+                    out.append("<text x=\"\(fmt(textX))\" y=\"\(fmt(nameY + Double(i) * M.nameLine))\" dominant-baseline=\"central\" font-size=\"13\" font-weight=\"\(weight)\" fill=\"\(palette.textPrimary)\">\(escape(line))</text>")
+                }
                 if n.badge {
                     let mark = ["world": "◎", "guess": "?", "advice": "✦"][src] ?? ""
                     out.append("<text x=\"\(fmt(n.w - M.padX - M.badge / 2 + 3))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11\" fill=\"\(ink)\">\(mark)</text>")
                 }
                 for (i, note) in n.notes.enumerated() {
-                    let y = M.padY + M.nameLine + Double(i) * M.noteLine + M.noteLine / 2
+                    let y = M.padY + Double(n.nameLines.count) * M.nameLine + Double(i) * M.noteLine + M.noteLine / 2
                     out.append("<text x=\"\(fmt(M.padX))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" font-size=\"11.5\" font-weight=\"500\" fill=\"\(palette.textSecondary)\">\(escape(note))</text>")
                 }
             } else {
@@ -131,9 +133,11 @@ public enum Export {
                 out.append("<circle cx=\"\(fmt(cx))\" cy=\"\(fmt(iconY))\" r=\"10\" fill=\"\(kindColour(node.note(kind: "kind")))\"/>")
                 if n.badge { out.append("<text x=\"\(fmt(cx + 15))\" y=\"\(fmt(iconY - 9))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"10\" fill=\"\(palette.textTertiary)\">✎</text>") }
                 let nameY = M.openPadY + M.iconLine + M.iconGap + M.nameLine / 2
-                out.append("<text x=\"\(fmt(cx))\" y=\"\(fmt(nameY))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"\(weight)\" fill=\"\(palette.textPrimary)\">\(escape(n.name))</text>")
+                for (i, line) in n.nameLines.enumerated() {
+                    out.append("<text x=\"\(fmt(cx))\" y=\"\(fmt(nameY + Double(i) * M.nameLine))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"\(weight)\" fill=\"\(palette.textPrimary)\">\(escape(line))</text>")
+                }
                 for (i, note) in n.notes.enumerated() {
-                    let y = nameY + M.nameLine / 2 + Double(i) * M.noteLine + M.noteLine / 2
+                    let y = nameY + (Double(n.nameLines.count) - 0.5) * M.nameLine + Double(i) * M.noteLine + M.noteLine / 2
                     out.append("<text x=\"\(fmt(cx))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11.5\" font-weight=\"500\" fill=\"\(palette.textSecondary)\">\(escape(note))</text>")
                 }
             }

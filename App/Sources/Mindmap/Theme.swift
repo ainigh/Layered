@@ -114,14 +114,14 @@ enum Theme {
 
         static let nameSize: CGFloat = 13
         static let noteSize: CGFloat = 11.5
-        /// Edge labels: a step smaller than notes, and set in the secondary grey.
-        static let labelSize: CGFloat = 10.5
+        /// Edge labels: smaller and lighter than notes, and set in the secondary grey.
+        static let labelSize: CGFloat = 10
         /// An open node's icon, twice its name.
         static let iconSize: CGFloat = nameSize * 2
         static let name = Font.system(size: nameSize, weight: .medium)
         static let rootName = Font.system(size: nameSize, weight: .semibold)
         static let note = Font.system(size: noteSize, weight: .medium)
-        static let label = Font.system(size: labelSize, weight: .medium)
+        static let label = Font.system(size: labelSize, weight: .regular)
         static let icon = Font.system(size: iconSize, weight: .regular)
         static let corner: CGFloat = 8
         /// Bounds of the zoom; a fit never zooms a small map in past `maxFit`.
@@ -132,8 +132,6 @@ enum Theme {
         static let zoomStep: CGFloat = 1.4
         /// Spacing of the background dots at zoom 1.
         static let dotGap: CGFloat = 20
-        /// Hovering a node: everything not tied to it steps back to this.
-        static let dimmed: Double = 0.22
         /// Buttons, keys and fit glide; drags and the wheel follow the hand.
         static let glide: TimeInterval = 0.24
 
@@ -141,7 +139,7 @@ enum Theme {
         @MainActor static func measure(_ text: String, _ role: MapLayout.TextRole) -> Double {
             let key = "\(role)\u{1}\(text)"
             if let w = widths[key] { return w }
-            let font = NSFont.systemFont(ofSize: role == .name ? nameSize : role == .label ? labelSize : noteSize, weight: .medium)
+            let font = NSFont.systemFont(ofSize: role == .name ? nameSize : role == .label ? labelSize : noteSize, weight: role == .label ? .regular : .medium)
             let w = Double(ceil((text as NSString).size(withAttributes: [.font: font]).width))
             if widths.count > 20_000 { widths.removeAll() }
             widths[key] = w

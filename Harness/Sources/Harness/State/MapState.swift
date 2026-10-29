@@ -249,6 +249,8 @@ public enum Action: Equatable, Sendable {
     case comment(on: String, String)
     case addEdge(from: String, label: String?, to: String)
     case pin(String, x: Double, y: Double)
+    /// Pin many nodes at once (Fill the view): one turn, so one undo puts them all back.
+    case arrange([String: Position])
     case release(String)
     /// Reverse the latest turn by appending its inverse (never by deleting).
     case undo
@@ -360,6 +362,15 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
     case .pin(let name, let x, let y):
         guard state.graph.node(name) != nil else { break }
         state.appendTurn(who: "user", what: "move \(name)", lines: ["| \(name) @pos \(Position(x: x, y: y).noteValue)"], now: now)
+
+    case .arrange(let places):
+        let lines = places.keys.sorted().compactMap { name -> String? in
+            guard let node = state.graph.node(name), let place = places[name] else { return nil }
+            let value = place.noteValue
+            return node.note(kind: "pos") == value ? nil : "| \(name) @pos \(value)"
+        }
+        guard !lines.isEmpty else { break }
+        state.appendTurn(who: "user", what: "arrange \(lines.count) nodes", lines: lines, now: now)
 
     case .release(let name):
         guard state.graph.node(name)?.note(kind: "pos") != nil else { break }

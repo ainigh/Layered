@@ -8,12 +8,16 @@ import Harness
 ///
 ///   drag empty space      move the map          scroll        move the map
 ///   pinch, ⌘-scroll       zoom about the pointer double-click  zoom in there (on a node: expand)
-///   + − 0, arrows         zoom, fit, move        hover a node  its links and neighbours stand out
+///   + − 0, arrows         zoom, fit, move        hover a node  its card, its links drawn heavier
 ///   drag a node           pin it there (`@pos`)  ⌥-drag        link it to another node
 ///   ⇧-drag                select a box           right-click   the node's actions
+///   F, ✦                  fill the view          spacing       the least room between nodes
 ///
 /// The map fits the view when it opens and refits as the window resizes or the map grows,
 /// until the user moves or zooms it. Buttons, keys and fit glide; drags follow the hand.
+/// Fill the view fits the map, then lets its nodes slide into the room around them and
+/// refits as they go, until zooming in gains nothing more (`Spread`); where they end up is
+/// pinned in one turn, so one undo puts the map back.
 struct CanvasView: View {
     @Bindable var session: MapSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -37,11 +41,18 @@ struct CanvasView: View {
     @State private var commentTarget: String?
     @State private var commentText = ""
     @State private var now = Date()
+    /// The map while Fill the view rearranges it, and the work doing it.
+    @State private var spreading: MapLayout?
+    @State private var spreadTask: Task<Void, Never>?
+    @State private var spreadFrom: MapLayout?
+    /// The least room Fill the view leaves between two nodes, in map points.
+    @AppStorage("map.spacing") private var spacing: Double = 24
     private let tick = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         let graph = session.displayedGraph
-        let base = session.displayedLayout
+        let live = session.displayedLayout
+        let base = spreading ?? live
         let layout = draggingNode.map { base.moving($0.name, dx: $0.offset.width / view.k, dy: $0.offset.height / view.k) } ?? base
 
         GeometryReader { geo in
@@ -99,9 +110,13 @@ struct CanvasView: View {
                     }
                     .padding(Theme.Space.m)
                 }
-                ZoomBar(zoomIn: { zoom(by: Theme.Map.zoomStep) }, zoomOut: { zoom(by: 1 / Theme.Map.zoomStep) }, fit: refit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .padding(Theme.Space.m)
+                HStack(alignment: .bottom, spacing: Theme.Space.s) {
+                    SpacingBar(spacing: $spacing) { fillView(restart: true) }
+                    ZoomBar(zoomIn: { zoom(by: Theme.Map.zoomStep) }, zoomOut: { zoom(by: 1 / Theme.Map.zoomStep) }, fit: refit,
+                            fill: { fillView() }, filling: spreadTask != nil)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .padding(Theme.Space.m)
             }
             .background(Theme.Map.background)
             .clipped()
@@ -116,7 +131,12 @@ struct CanvasView: View {
             }
             .onAppear { size = geo.size; fit(layout: base, animate: false) }
             .onChange(of: geo.size) { _, s in size = s; if !touched { fit(layout: base, animate: false) } }
-            .onChange(of: base) { _, next in if !touched { fit(layout: next, animate: true) } }
+            .onChange(of: live) { _, next in
+                // The map changed under a spread: what it was arranging is gone.
+                if next != spreadFrom { finishSpread(commit: false) }
+                if !touched { fit(layout: next, animate: true) }
+            }
+            .onDisappear { finishSpread(commit: false) }
             .onChange(of: session.viewingTurn) { _, _ in touched = false; fit(layout: session.displayedLayout, animate: true) }
             .onReceive(tick) { t in
                 // Redraw only while a highlight is fading.
@@ -178,6 +198,57 @@ struct CanvasView: View {
         fit(layout: session.displayedLayout, animate: true)
     }
 
+    /// Fill the view: the map fitted, then its nodes slide into the room around them while
+    /// it refits, until zooming in gains nothing more. Pressed again while it runs, it stops
+    /// there; `restart` starts it over (the spacing changed).
+    private func fillView(restart: Bool = false) {
+        if spreadTask != nil {
+            finishSpread(commit: true)
+            if !restart { return }
+        }
+        let start = session.displayedLayout
+        guard size.width > 0, session.viewingTurn == nil, start.nodes.count > 1 else { refit(); return }
+        let pad = Theme.Map.fitPad
+        let first = Spread(layout: start, viewWidth: Double(size.width - 2 * pad), viewHeight: Double(size.height - 2 * pad),
+                           gap: spacing, maxZoom: Double(Theme.Map.maxFit))
+        touched = false
+        spreadFrom = start
+        spreadTask = Task { @MainActor in
+            var spread = first
+            show(spread, from: start)
+            while !spread.finished {
+                let now = spread
+                spread = await Task.detached(priority: .userInitiated) { var next = now; next.run(limit: 4); return next }.value
+                guard !Task.isCancelled else { return }
+                show(spread, from: start)
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            guard !Task.isCancelled else { return }
+            finishSpread(commit: true)
+        }
+    }
+
+    private func show(_ spread: Spread, from start: MapLayout) {
+        let shown = start.placing(spread.centers)
+        spreading = shown
+        fit(layout: shown, animate: false)
+    }
+
+    /// Ends a spread: with `commit`, the nodes are pinned where it got them to (one turn).
+    private func finishSpread(commit: Bool) {
+        spreadTask?.cancel()
+        spreadTask = nil
+        spreadFrom = nil
+        if commit, let shown = spreading {
+            spreading = nil
+            touched = false
+            session.dispatch(.arrange(Dictionary(uniqueKeysWithValues: shown.nodes.map {
+                ($0.id.name, Position(x: $0.center.x.rounded(), y: $0.center.y.rounded()))
+            })))
+        }
+        spreading = nil
+    }
+
     /// Zooms by `factor` keeping the map point under `point` (the centre by default) where it is.
     private func zoom(by factor: CGFloat, at point: CGPoint? = nil, animate: Bool = true) {
         let p = point ?? CGPoint(x: size.width / 2, y: size.height / 2)
@@ -204,6 +275,7 @@ struct CanvasView: View {
         case "+", "=": zoom(by: Theme.Map.zoomStep); return true
         case "-", "_": zoom(by: 1 / Theme.Map.zoomStep); return true
         case "0": refit(); return true
+        case "f", "F": fillView(); return true
         default: break
         }
         let step: CGFloat = 60
@@ -225,15 +297,10 @@ struct CanvasView: View {
     private func draw(graph: Graph, layout: MapLayout, in ctx: inout GraphicsContext, size: CGSize, v: Viewport) {
         drawDots(&ctx, size: size, v: v)
 
-        // What the hovered node touches stays lit; the rest steps back.
-        var lit: Set<String>?
+        // The hovered node's links draw a little heavier; nothing else changes.
         var litEdges = Set<EdgeKey>()
         if let hovered, draggingNode == nil {
-            lit = [hovered]
-            for e in layout.edges where e.key.lo.name == hovered || e.key.hi.name == hovered {
-                litEdges.insert(e.key)
-                lit!.insert(e.key.lo.name); lit!.insert(e.key.hi.name)
-            }
+            for e in layout.edges where e.key.lo.name == hovered || e.key.hi.name == hovered { litEdges.insert(e.key) }
         }
 
         var world = ctx
@@ -242,19 +309,16 @@ struct CanvasView: View {
 
         for e in layout.edges {
             var layer = world
-            if lit != nil, !litEdges.contains(e.key) { layer.opacity = Theme.Map.dimmed }
             drawEdge(e, graph.edges[e.key], lit: litEdges.contains(e.key), in: &layer)
         }
         for p in layout.nodes {
             guard let node = graph.nodes[p.id] else { continue }
             var layer = world
-            if let lit, !lit.contains(p.id.name) { layer.opacity = Theme.Map.dimmed }
             drawNode(p, node, in: &layer)
         }
         // Labels last, so no curve runs through them.
         for e in layout.edges where !e.label.isEmpty || !e.note.isEmpty {
             var layer = world
-            if lit != nil, !litEdges.contains(e.key) { layer.opacity = Theme.Map.dimmed }
             drawLabel(e, in: &layer)
         }
 
@@ -380,7 +444,7 @@ struct CanvasView: View {
         let selected = session.selectedEdge == e.key
         let colour = selected ? Theme.accent : Theme.Map.branch(e.branch) ?? Theme.Map.tertiary
         let dash: [CGFloat] = src == "guess" ? [2, 3] : src == "world" ? [6, 4] : e.tree ? [] : [5, 4]
-        let width: CGFloat = (e.tree ? 2 : 1.5) + (lit || selected ? 0.75 : 0)
+        let width: CGFloat = (e.tree ? 1.25 : 1) + (lit || selected ? 0.5 : 0)
         if src == "guess" { ctx.opacity *= 0.75 }
         ctx.stroke(path, with: .color(colour), style: StrokeStyle(lineWidth: width, lineCap: .round, dash: dash))
         if e.arrowEnd { arrow(&ctx, tip: e.p3, from: e.p2.x == e.p3.x && e.p2.y == e.p3.y ? e.p0 : e.p2, colour: colour) }
@@ -391,7 +455,7 @@ struct CanvasView: View {
         let dx = tip.x - from.x, dy = tip.y - from.y
         let d = max(hypot(dx, dy), 0.001)
         let ux = dx / d, uy = dy / d
-        let length = 7.0, half = 2.8
+        let length = 6.0, half = 2.4
         var path = Path()
         path.move(to: CGPoint(x: tip.x, y: tip.y))
         path.addLine(to: CGPoint(x: tip.x - ux * length - uy * half, y: tip.y - uy * length + ux * half))
@@ -459,7 +523,8 @@ struct CanvasView: View {
                     go(Viewport(x: start.x + value.translation.width, y: start.y + value.translation.height, k: start.k), animate: false)
                     return
                 }
-                // The first movement decides what this drag is.
+                // The first movement decides what this drag is; a spread stops where it is.
+                if spreadTask != nil { finishSpread(commit: true) }
                 hovered = nil
                 if let name = hit(value.startLocation, layout) {
                     if NSEvent.modifierFlags.contains(.option) { linkDrag = (name, value.location) } else { draggingNode = (name, value.translation) }
@@ -538,6 +603,7 @@ struct CanvasView: View {
             }
         } else {
             Button("Fit map") { refit() }
+            Button("Fill the view") { fillView() }
             if session.layout.nodes.contains(where: \.pinned) {
                 Button("Release all pins") {
                     for p in session.layout.nodes where p.pinned { session.dispatch(.release(p.id.name)) }
@@ -578,20 +644,45 @@ extension CGPoint {
     init(_ p: MapLayout.Point) { self.init(x: p.x, y: p.y) }
 }
 
-/// Zoom in, zoom out and fit: a small bar in the bottom right corner.
+/// Zoom in, zoom out, fit and fill: a small bar in the bottom right corner.
 struct ZoomBar: View {
     let zoomIn: () -> Void
     let zoomOut: () -> Void
     let fit: () -> Void
+    let fill: () -> Void
+    var filling = false
 
     var body: some View {
         VStack(spacing: 2) {
             MapToolButton(symbol: "plus", help: "Zoom in (+)", action: zoomIn)
             MapToolButton(symbol: "minus", help: "Zoom out (−)", action: zoomOut)
             MapToolButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Fit the map (0)", action: fit)
+            MapToolButton(symbol: "wand.and.stars", help: filling ? "Stop filling the view here (F)" : "Fill the view: nodes move into the room around them until the map can zoom in no further (F; undo puts them back)",
+                          pressed: filling, action: fill)
         }
         .padding(3)
         .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge - 2))
+    }
+}
+
+/// Spacing: the least room Fill the view leaves between two nodes. Letting go of the
+/// slider fills the view again with the new spacing.
+struct SpacingBar: View {
+    @Binding var spacing: Double
+    let changed: () -> Void
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            Image(systemName: "arrow.left.and.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            Slider(value: $spacing, in: 0...120, step: 2, onEditingChanged: { editing in if !editing { changed() } })
+                .controlSize(.small)
+                .frame(width: 110)
+            Text("\(Int(spacing)) pt").font(Theme.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 38, alignment: .trailing)
+        }
+        .padding(.horizontal, Theme.Space.s + 2)
+        .frame(height: 34)
+        .floatingBar(in: Capsule())
+        .help("Spacing between nodes: the least room Fill the view leaves between two nodes")
     }
 }
 

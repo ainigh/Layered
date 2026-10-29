@@ -88,6 +88,8 @@ public struct ModelRunner: Sendable {
                     responseTokens = chunk.responseTokens ?? responseTokens
                 }
             }
+            // A stopped stream ends without an error: stop here, so nothing half-read is applied.
+            try Task.checkCancellation()
             if usesNotation { for line in lines.flush() { feed(line) } }
         }
 
@@ -117,6 +119,7 @@ public struct ModelRunner: Sendable {
             let repairRequest = ModelRequest(model: model, prompt: repairPrompt, grammar: request.grammar, temperature: request.temperature, contextSize: request.contextSize)
             raw += "\n"
             try? await stream(repairRequest)
+            try Task.checkCancellation()
         }
 
         onEvent(.done)

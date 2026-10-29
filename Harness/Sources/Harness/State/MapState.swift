@@ -28,6 +28,10 @@ public struct MapState: Equatable, Sendable {
     public private(set) var turns: [Turn] = []
     /// Texts submitted so far, by id: the verbatim source (`texts/n.txt`).
     public var texts: [Int: String] = [:]
+    /// The append-only context (`context.md`).
+    public var context = ContextDocument()
+    /// Transcripts by text id, kept verbatim.
+    public var transcripts: [Int: Transcript] = [:]
     /// The “what was held back” drawer for the last model turn.
     public var heldBack: [GateEvent] = []
     /// Over-budget model lines the user can apply by hand.
@@ -62,6 +66,12 @@ public struct MapState: Equatable, Sendable {
 
     public var canonical: String { Canonical.render(graph) }
 
+    /// Speaker labels → names, from clarification answers.
+    public var speakers: SpeakerMap { SpeakerMap(context: context) }
+
+    /// Aliases for the gate's proof check.
+    public var aliases: [String: [String]] { speakers.aliases }
+
     // MARK: - Appending
 
     /// Appends a turn: the header, then each line, compiling as it goes. Lines that
@@ -95,8 +105,14 @@ public struct MapState: Equatable, Sendable {
 
 /// Every behaviour of the app is `MapState` + `Action` → `MapState`.
 public enum Action: Equatable, Sendable {
-    /// Record a submitted text in the evidence store (numbering sentences).
-    case submitText(String)
+    /// Append a paragraph to the context and record it in the evidence store under a new text id.
+    case submitText(String, kind: ContextParagraph.Kind = .pasted)
+    /// A transcript lands in the context with timestamps and speakers, and in the evidence store with times.
+    case submitTranscript(Transcript)
+    /// Answer a Clarify question: appended to the context as a `[clarification]` paragraph.
+    case answer(ClarifyQuestion?, String)
+    /// Map a speaker label to a name: `Speaker 1 is Ana`, appended as a clarification.
+    case nameSpeaker(label: String, name: String)
     /// Run model output through the gate and append what passes.
     case applyModelOutput(String, prompt: PromptKind, textID: Int?, about: String)
     /// Append what a finished `ModelRun` produced (the gate already ran while streaming).
@@ -116,12 +132,40 @@ public enum Action: Equatable, Sendable {
 public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
     var state = state
     switch action {
-    case .submitText(let text):
-        let (id, _) = state.evidence.appendText(text)
-        state.texts[id] = text
+    case .submitText(let text, let kind):
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { break }
+        let (id, _) = state.evidence.appendText(body)
+        state.texts[id] = body
+        state.context.append(ContextParagraph(kind: kind, textID: id, date: now, body: body))
+
+    case .submitTranscript(let transcript):
+        let id = state.evidence.nextTextID
+        let sentences = transcript.sentences(textID: id)
+        guard !sentences.isEmpty else { break }
+        for s in sentences { state.evidence.append(s) }
+        state.texts[id] = transcript.rendered
+        state.transcripts[id] = transcript
+        state.context.append(ContextParagraph(kind: .transcript, textID: id, date: now, body: transcript.rendered))
+
+    case .answer(let question, let answer):
+        let body = Text.collapse(answer)
+        guard !body.isEmpty else { break }
+        let full = question.map { "\(body) (s\($0.sentence): \($0.question))" } ?? body
+        let (id, _) = state.evidence.appendText(full)
+        state.texts[id] = full
+        state.context.append(ContextParagraph(kind: .clarification, textID: id, date: now, body: full))
+
+    case .nameSpeaker(let label, let name):
+        let canon = Canonicaliser.canonical(name)
+        guard !canon.isEmpty, Int(label.lowercased().replacingOccurrences(of: "speaker ", with: "")) != nil else { break }
+        let body = SpeakerMap.clarification(label: label, name: canon)
+        let (id, _) = state.evidence.appendText(body)
+        state.texts[id] = body
+        state.context.append(ContextParagraph(kind: .clarification, textID: id, date: now, body: body))
 
     case .applyModelOutput(let output, let prompt, let textID, let about):
-        let result = Gate.run(output, graph: state.graph, evidence: state.evidence, options: GateOptions(prompt: prompt, textID: textID))
+        let result = Gate.run(output, graph: state.graph, evidence: state.evidence, options: GateOptions(prompt: prompt, textID: textID, aliases: state.aliases))
         state.heldBack = result.events
         state.suggestions = result.deferred
         state.appendTurn(who: "model", what: "\(prompt.rawValue) \(about)", lines: result.lines, now: now)

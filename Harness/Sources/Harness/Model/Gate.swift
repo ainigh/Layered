@@ -242,7 +242,8 @@ public struct Gate: Sendable {
     }
 
     func mentions(_ sentence: Sentence, _ name: String) -> Bool {
-        let hay = " " + Gate.matchable(sentence.sentence) + " "
+        let speaker = sentence.speaker.map { " " + Gate.matchable($0) } ?? ""
+        let hay = " " + Gate.matchable(sentence.sentence) + speaker + " "
         return ([name] + (options.aliases[name] ?? [])).contains { candidate in
             let m = Gate.matchable(candidate)
             guard !m.isEmpty else { return false }

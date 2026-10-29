@@ -17,7 +17,9 @@ public enum Persistence {
         var state = try MapState(log: try storage.readLog(), evidence: evidence)
         for id in Set(evidence.sentences.map(\.text)) {
             if let text = try storage.readText(id: id) { state.texts[id] = text }
+            if let data = try storage.readTranscript(id: id), let t = try? JSONDecoder().decode(Transcript.self, from: data) { state.transcripts[id] = t }
         }
+        state.context = ContextDocument(markdown: try storage.readContext())
         var prompts = PromptSet()
         for kind in PromptKind.allCases {
             if let override = try storage.readPrompt(kind) { prompts.overrides[kind] = override }
@@ -44,6 +46,13 @@ public enum Persistence {
         }
         for (id, text) in after.texts where before.texts[id] == nil {
             do { try storage.writeText(id: id, text) } catch { pending.append("text \(id)"); try? storage.appendErrorLog("texts/\(id).txt: \(error)") }
+        }
+        let newParagraphs = after.context.paragraphs.dropFirst(before.context.paragraphs.count)
+        if !newParagraphs.isEmpty {
+            do { try storage.appendContext(newParagraphs.map(\.rendered).joined()) } catch { pending.append("context"); try? storage.appendErrorLog("context.md: \(error)") }
+        }
+        for (id, transcript) in after.transcripts where before.transcripts[id] == nil {
+            if let data = try? JSONEncoder().encode(transcript) { try? storage.writeTranscript(id: id, data) }
         }
         if let last = after.turns.last, after.turns.count > before.turns.count {
             try? storage.writeSnapshot(turn: last.number, after.canonical)

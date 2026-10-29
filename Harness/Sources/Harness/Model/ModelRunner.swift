@@ -43,11 +43,15 @@ public struct ModelRunner: Sendable {
     public var client: any ModelClient
     public var settings: ModelSettings
     public var prompts: PromptSet
+    /// Put everything that passes the checks on the map, repeats and all, with no budget
+    /// (`GateOptions.appendAll`): the app reviews the model's additions on the map.
+    public var appendAll: Bool
 
-    public init(client: any ModelClient, settings: ModelSettings, prompts: PromptSet = PromptSet()) {
+    public init(client: any ModelClient, settings: ModelSettings, prompts: PromptSet = PromptSet(), appendAll: Bool = false) {
         self.client = client
         self.settings = settings
         self.prompts = prompts
+        self.appendAll = appendAll
     }
 
     /// The prompt text for a kind, without running it (shown in the Prompt panel, used by tests).
@@ -69,7 +73,8 @@ public struct ModelRunner: Sendable {
         var request = ModelRequest(model: model, prompt: prompt(kind, state: state, item: item, contextOnly: contextOnly, texts: texts),
                                    grammar: grammar, temperature: settings.temperature, contextSize: settings.contextSize)
 
-        var session = GateSession(gate: Gate(options: GateOptions(prompt: kind, textID: textID, aliases: aliases)), graph: state.graph, evidence: state.proofEvidence)
+        let options = appendAll ? GateOptions.appendAll(prompt: kind, textID: textID, aliases: aliases) : GateOptions(prompt: kind, textID: textID, aliases: aliases)
+        var session = GateSession(gate: Gate(options: options), graph: state.graph, evidence: state.proofEvidence)
         var raw = ""
         var promptTokens: Int?
         var responseTokens: Int?

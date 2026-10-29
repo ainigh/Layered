@@ -43,6 +43,12 @@ final class MapSession {
     var viewingTurn: Int?
     /// What is open over the map: a context item, Ask me's questions, or Check coverage's report.
     var overlay: Overlay?
+    /// What the model added that the user has not accepted or deleted yet: flagged on the map
+    /// with ✓ and ✕. Kept per map between launches.
+    var review = Review() { didSet { if review != oldValue { saveReview() } } }
+    /// A word from the last model turn, shown on the map rather than over it: a reply to
+    /// open, or what Check coverage found.
+    var notice: Notice?
     /// The Context panel's new-item box, kept as it is typed.
     var composerDraft = "" { didSet { UserDefaults.standard.set(composerDraft, forKey: "draft:\(title)") } }
 
@@ -131,6 +137,7 @@ final class MapSession {
         if settings.model.model == nil, case .demo = mode { self.settings.model.model = Self.demoModel }
         composerDraft = UserDefaults.standard.string(forKey: "draft:\(title)") ?? ""
         relayout()
+        loadReview()
     }
 
     // MARK: - Dispatch
@@ -146,6 +153,12 @@ final class MapSession {
         next.errors.forEach { try? storage.appendErrorLog($0) }
         state = next
         pendingWrites = Persistence.sync(before: before, after: next, storage: storage)
+        // What a model turn adds goes on the map at once; the user accepts or deletes it there.
+        switch action {
+        case .applyRun, .applyModelOutput: review.mark(from: before.graph, to: next.graph)
+        default: break
+        }
+        review.prune(next.graph)
         relayout()
         viewingTurn = nil
         if Persistence.optimizeDue(state, settings: settings) { optimize() }
@@ -294,7 +307,7 @@ final class MapSession {
     // MARK: - Model
 
     private var runner: ModelRunner {
-        ModelRunner(client: client, settings: settings.model, prompts: prompts)
+        ModelRunner(client: client, settings: settings.model, prompts: prompts, appendAll: true)
     }
 
     @discardableResult
@@ -322,11 +335,12 @@ final class MapSession {
                 // The map takes the lines; prose becomes a model item, opened over the map.
                 let reply = ChatReply.parse(run.rawOutput)
                 if !reply.lines.isEmpty {
-                    dispatch(.applyModelOutput(reply.lines.joined(separator: "\n"), prompt: .chat, textID: textID, about: about))
+                    dispatch(.applyModelOutput(reply.lines.joined(separator: "\n"), prompt: .chat, textID: textID, about: about, appendAll: true))
                 }
                 if !reply.prose.isEmpty {
                     dispatch(.addReply(reply.prose, question: item))
-                    if let id = state.context.items.last?.id { overlay = .item(id) }
+                    // The reply joins the context; the map only says so, so work goes on there.
+                    if let id = state.context.items.last?.id { notice = Notice(text: "The model replied: " + String(Harness.Text.collapse(reply.prose).prefix(120)), item: id) }
                 }
             case .clarify:
                 clarifyQuestions = ClarifyQuestion.parse(run.rawOutput)
@@ -370,8 +384,17 @@ final class MapSession {
     func checkCoverage() {
         Task {
             if let run = await runVerify() {
-                verifyReport = VerifyReport.parse(run.rawOutput)
-                overlay = .coverage
+                // What the map lacks goes straight on it, for review there.
+                var report = VerifyReport.parse(run.rawOutput)
+                let lines = report.proposals.flatMap(\.lines)
+                if !lines.isEmpty {
+                    dispatch(.applyModelOutput(lines.joined(separator: "\n"), prompt: .verify, textID: state.evidence.sentences.last?.text, about: "coverage", appendAll: true))
+                }
+                let found = report.proposals.count
+                report.proposals = []
+                verifyReport = report
+                notice = Notice(text: found == 0 ? "Check coverage: everything in the context is on the map." : "Check coverage put \(found) facts on the map for review.",
+                                report: !report.missingNodes.isEmpty)
             }
         }
     }
@@ -379,10 +402,61 @@ final class MapSession {
     private func runVerify() async -> ModelRun? {
         running = .verify
         runningSince = Date()
+        lastError = nil
         let task = Task { [runner, state] in try await runner.run(.verify, state: state, item: "", aliases: state.aliases) }
         cancelRun = { task.cancel() }
         defer { running = nil; runningSince = nil; cancelRun = nil }
-        return try? await task.value
+        do {
+            return try await task.value
+        } catch {
+            if !(error is CancellationError) {
+                let raw = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
+                lastError = (raw, "Check coverage failed", { [weak self] in self?.checkCoverage() })
+            }
+            return nil
+        }
+    }
+
+    // MARK: - Review
+
+    func accept(node name: String) { review.accept(node: name) }
+    func accept(edge key: EdgeKey) { review.accept(edge: key) }
+    func acceptAll() { review.acceptAll() }
+
+    func reject(node name: String) {
+        dispatch(.delete(name))
+        selection.remove(name)
+    }
+
+    func reject(edge key: EdgeKey) {
+        dispatch(.applyLines(review.deletion(in: state.graph, nodes: [], edges: [key]), what: "delete link \(key.lo.name) \(key.hi.name)"))
+        if selectedEdge == key { selectedEdge = nil }
+    }
+
+    /// Everything waiting for review off the map, in one turn (one undo brings it back).
+    func rejectAll() {
+        let n = review.count
+        dispatch(.applyLines(review.deletion(in: state.graph), what: "delete \(n) suggestions"))
+        selection.subtract(review.nodes)
+        review.acceptAll()
+    }
+
+    private var reviewKey: String { "review:\(title)" }
+
+    private func saveReview() {
+        let value: [String: [String]] = ["nodes": review.nodes.sorted(), "edges": review.edges.sorted().map { $0.lo.name + "\u{1}" + $0.hi.name }]
+        UserDefaults.standard.set(value, forKey: reviewKey)
+    }
+
+    private func loadReview() {
+        guard let value = UserDefaults.standard.dictionary(forKey: reviewKey) as? [String: [String]] else { return }
+        let edges = (value["edges"] ?? []).compactMap { s -> EdgeKey? in
+            let parts = s.components(separatedBy: "\u{1}")
+            return parts.count == 2 ? EdgeKey(NodeID(name: parts[0]), NodeID(name: parts[1])) : nil
+        }
+        var loaded = Review(nodes: Set(value["nodes"] ?? []), edges: Set(edges))
+        loaded.prune(state.graph)
+        review = loaded
     }
 
     /// Stops the request the model is working on: what it sent so far is dropped, and a
@@ -395,7 +469,7 @@ final class MapSession {
 
     func applyProposal(_ proposal: VerifyReport.Proposal) {
         let textID = state.evidence.sentences.last?.text
-        dispatch(.applyModelOutput(proposal.lines.joined(separator: "\n"), prompt: .verify, textID: textID, about: "s\(proposal.sentence)"))
+        dispatch(.applyModelOutput(proposal.lines.joined(separator: "\n"), prompt: .verify, textID: textID, about: "s\(proposal.sentence)", appendAll: true))
         verifyReport?.proposals.removeAll { $0 == proposal }
     }
 
@@ -427,6 +501,15 @@ final class MapSession {
 }
 
 /// What can open over the map. Opening one closes the side panes until it closes.
+/// A word from the model's last turn, on the map instead of over it.
+struct Notice: Equatable {
+    var text: String
+    /// The context item it is about (a reply), to open.
+    var item: Int?
+    /// Check coverage's report has more to show.
+    var report = false
+}
+
 enum Overlay: Equatable {
     case item(Int)
     case clarify

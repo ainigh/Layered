@@ -18,6 +18,10 @@ import Harness
 /// Fill the view fits the map, then lets its nodes slide into the room around them and
 /// refits as they go, until zooming in gains nothing more (`Spread`); where they end up is
 /// pinned in one turn, so one undo puts the map back.
+///
+/// What the model added and the user has not decided on yet (`session.review`) wears a
+/// dashed ring, with ✓ (keep it) and ✕ (delete it) above its top right corner; a link
+/// between nodes already there is tinted, with the pair under its label.
 struct CanvasView: View {
     @Bindable var session: MapSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -53,6 +57,8 @@ struct CanvasView: View {
         let graph = session.displayedGraph
         let live = session.displayedLayout
         let base = spreading ?? live
+        // Read here so the canvas redraws when something is accepted or deleted.
+        let _ = session.review
         let layout = draggingNode.map { base.moving($0.name, dx: $0.offset.width / view.k, dy: $0.offset.height / view.k) } ?? base
 
         GeometryReader { geo in
@@ -66,6 +72,7 @@ struct CanvasView: View {
                 .gesture(canvasDrag(layout: layout))
                 .simultaneousGesture(pinch)
                 .onTapGesture(count: 2) { location in
+                    if let b = hitReview(location, layout) { decide(b); return }
                     if let name = hit(location, layout) { session.expand(name) } else { zoom(by: Theme.Map.zoomStep, at: location, animate: true) }
                 }
                 .onTapGesture(count: 1) { location in
@@ -321,6 +328,8 @@ struct CanvasView: View {
             var layer = world
             drawLabel(e, in: &layer)
         }
+        // Review buttons on top, the same size at any zoom.
+        for b in reviewButtons(layout, v) { drawReviewButton(b, in: &ctx) }
 
         if let linkDrag, let p = layout[linkDrag.from] {
             var path = Path()
@@ -365,7 +374,71 @@ struct CanvasView: View {
             if !p.boxed { ctx.fill(ring, with: .color(Theme.accent.opacity(0.1))) }
             ctx.stroke(ring, with: .color(Theme.accent), lineWidth: 2)
         }
+        if session.viewingTurn == nil, session.review.nodes.contains(p.id.name) {
+            let ring = Path(roundedRect: rect.insetBy(dx: -6, dy: -6), cornerRadius: Theme.Map.corner + 6)
+            ctx.fill(ring, with: .color(Theme.accent.opacity(0.06)))
+            ctx.stroke(ring, with: .color(Theme.accent.opacity(0.8)), style: StrokeStyle(lineWidth: 1.25, dash: [4, 3]))
+        }
         if p.boxed { drawCard(p, node, rect: rect, src: src, in: &ctx) } else { drawOpen(p, node, in: &ctx) }
+    }
+
+    /// A ✓ or ✕ for something waiting for review, where `reviewButtons` puts it.
+    private struct ReviewButton {
+        let at: CGPoint
+        let accept: Bool
+        var node: String?
+        var edge: EdgeKey?
+        static let radius: CGFloat = 9
+    }
+
+    /// Above a node's top right corner, or under a link's label (on its curve when it has none).
+    private func reviewButtons(_ layout: MapLayout, _ v: Viewport) -> [ReviewButton] {
+        guard session.viewingTurn == nil, !session.review.isEmpty else { return [] }
+        let r = ReviewButton.radius
+        var out: [ReviewButton] = []
+        for name in session.review.nodes.sorted() {
+            guard let p = layout[name] else { continue }
+            let corner = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y))
+            let y = corner.y - r - 4
+            out.append(ReviewButton(at: CGPoint(x: corner.x - r - 1, y: y), accept: true, node: name))
+            out.append(ReviewButton(at: CGPoint(x: corner.x + r + 1, y: y), accept: false, node: name))
+        }
+        for key in session.review.edges.sorted() {
+            guard let e = layout.edges.first(where: { $0.key == key }) else { continue }
+            let at = v.screen(e.labelAt)
+            let lines = [e.label, e.note].filter { !$0.isEmpty }.count
+            let y = at.y + (lines == 0 ? 0 : CGFloat(Double(lines) * MapLayout.Metrics.labelLine / 2) * v.k + r + 2)
+            out.append(ReviewButton(at: CGPoint(x: at.x - r - 1, y: y), accept: true, edge: key))
+            out.append(ReviewButton(at: CGPoint(x: at.x + r + 1, y: y), accept: false, edge: key))
+        }
+        return out
+    }
+
+    private func drawReviewButton(_ b: ReviewButton, in ctx: inout GraphicsContext) {
+        let r = ReviewButton.radius
+        let circle = Path(ellipseIn: CGRect(x: b.at.x - r, y: b.at.y - r, width: 2 * r, height: 2 * r))
+        let ink: Color = b.accept ? .green : .red
+        ctx.fill(Path(ellipseIn: CGRect(x: b.at.x - r, y: b.at.y - r + 1, width: 2 * r, height: 2 * r)), with: .color(.black.opacity(0.12)))
+        ctx.fill(circle, with: .color(Theme.Map.background))
+        ctx.stroke(circle, with: .color(ink.opacity(0.7)), lineWidth: 1)
+        ctx.draw(Text(Image(systemName: b.accept ? "checkmark" : "xmark")).font(.system(size: 8.5, weight: .bold)).foregroundStyle(ink), at: b.at, anchor: .center)
+    }
+
+    /// The ✓ or ✕ under a click, if any.
+    private func hitReview(_ point: CGPoint, _ layout: MapLayout) -> ReviewButton? {
+        reviewButtons(layout, view).last { hypot($0.at.x - point.x, $0.at.y - point.y) <= ReviewButton.radius + 2 }
+    }
+
+    private func decide(_ b: ReviewButton) {
+        withAnimation(Theme.selection) {
+            switch (b.node, b.edge, b.accept) {
+            case (let name?, _, true): session.accept(node: name)
+            case (let name?, _, false): session.reject(node: name)
+            case (nil, let key?, true): session.accept(edge: key)
+            case (nil, let key?, false): session.reject(edge: key)
+            default: break
+            }
+        }
     }
 
     /// The node's icon: its own, a matching one from the icon set, or its kind's glyph.
@@ -446,6 +519,9 @@ struct CanvasView: View {
         let dash: [CGFloat] = src == "guess" ? [2, 3] : src == "world" ? [6, 4] : e.tree ? [] : [5, 4]
         let width: CGFloat = (e.tree ? 1.25 : 1) + (lit || selected ? 0.5 : 0)
         if src == "guess" { ctx.opacity *= 0.75 }
+        if session.viewingTurn == nil, session.review.edges.contains(e.key) {
+            ctx.stroke(path, with: .color(Theme.accent.opacity(0.25)), style: StrokeStyle(lineWidth: width + 5, lineCap: .round))
+        }
         ctx.stroke(path, with: .color(colour), style: StrokeStyle(lineWidth: width, lineCap: .round, dash: dash))
         if e.arrowEnd { arrow(&ctx, tip: e.p3, from: e.p2.x == e.p3.x && e.p2.y == e.p3.y ? e.p0 : e.p2, colour: colour) }
         if e.arrowStart { arrow(&ctx, tip: e.p0, from: e.p1.x == e.p0.x && e.p1.y == e.p0.y ? e.p3 : e.p1, colour: colour) }
@@ -499,6 +575,7 @@ struct CanvasView: View {
     }
 
     private func select(at point: CGPoint, layout: MapLayout, additive: Bool) {
+        if let b = hitReview(point, layout) { decide(b); return }
         withAnimation(Theme.selection) {
             if let name = hit(point, layout) {
                 if additive { session.selection.formSymmetricDifference([name]) } else { session.selection = [name] }
@@ -563,6 +640,11 @@ struct CanvasView: View {
         let target = hovered.flatMap { session.selection.contains($0) ? nil : $0 }
         let names = target.map { [$0] } ?? session.selection.sorted()
         if names.count == 1, let name = names.first, let node = graph.nodes[NodeID(name: name)] {
+            if session.review.nodes.contains(name) {
+                Button("Accept the model's addition") { session.accept(node: name) }
+                Button("Delete the model's addition") { session.reject(node: name) }
+                Divider()
+            }
             Button("Expand") { session.expand(name) }
             Button("Rename…") { renameText = name; renameTarget = name }
             Button("Add comment…") { commentTarget = name }
@@ -588,6 +670,10 @@ struct CanvasView: View {
             Divider()
             Button("Delete \(names.count) nodes", role: .destructive) { names.forEach { session.dispatch(.delete($0)) }; session.selection = [] }
         } else if let key = session.selectedEdge, let edge = graph.edges[key] {
+            if session.review.edges.contains(key) {
+                Button("Accept the model's link") { session.accept(edge: key) }
+                Divider()
+            }
             Button("Edit label…") { labelText = edge.labels.first ?? ""; labelPrompt = (edge.a.name, edge.b.name) }
             if ["world", "guess", "advice"].contains(edge.note(kind: "src") ?? "") {
                 Button("Confirm") { session.dispatch(.applyLines(["| \(edge.a.name) @src user - | \(edge.b.name)"], what: "confirm edge")) }

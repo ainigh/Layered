@@ -45,7 +45,10 @@ public enum Demo {
             .init(kind: .chat, response: "Ana reviews the paper that Sam is writing; the deadline is Nov 3.\n\n```mm\n| paper @todo send draft early @src advice\n```\n", promptTokens: 700, responseTokens: 30),
             .init(kind: .clarify, response: "s1 [pronoun] Who is \"I\" in the first sentence?\ns2 [time] Which year is Nov 3?\n", promptTokens: 500, responseTokens: 25),
             .init(kind: .dedupe, response: "", promptTokens: 300, responseTokens: 2),
-            .init(kind: .verify, response: "", promptTokens: 600, responseTokens: 2),
+            // One sentence at a time, for the tiny demo's text; any other sentence adds nothing new.
+            .init(kind: .sentence, match: "Sentence:\nI'm Sam.", response: "| sam @kind person\n", promptTokens: 400, responseTokens: 6),
+            .init(kind: .sentence, match: "Sentence:\nI'm writing a paper", response: "| paper @kind thing\n| sam - writes | paper\n| ana @kind person\n| ana - reviews | paper\n| paper @date 2026-11-03\n", promptTokens: 420, responseTokens: 40),
+            .init(kind: .sentence, response: "", promptTokens: 400, responseTokens: 1),
             .init(kind: .extract, response: "| sam @kind person @src text @s 1\n| paper @kind thing @src text @s 2\n| sam - writes | paper @src text @s 2\n| ana @kind person @src text @s 2\n| ana - reviews | paper @src text @s 2\n", promptTokens: 800, responseTokens: 60),
         ], installed: [ModelInfo(name: "demo", sizeBytes: 0)])
     }

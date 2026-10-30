@@ -57,25 +57,31 @@ public struct ModelRunner: Sendable {
     }
 
     /// The prompt text for a kind, without running it (shown in the Prompt panel, used by tests).
-    /// The context is the selected items unless `texts` names others.
+    /// The context is the selected items unless `texts` names others; one sentence at a time
+    /// sends none, only the map and the sentence.
     public func prompt(_ kind: PromptKind, state: MapState, item: String, contextOnly: Bool = false, texts: [Int]? = nil) -> String {
         prompts.render(kind,
                        map: contextOnly ? "" : state.canonical,
-                       context: ContextRenderer.numbered(state.evidence, texts: texts ?? state.modelTexts, replies: state.context.replyTexts),
+                       context: kind == .sentence ? "" : ContextRenderer.numbered(state.evidence, texts: texts ?? state.modelTexts, replies: state.context.replyTexts),
                        nodes: state.graph.rootNames,
                        item: item)
     }
 
-    public func run(_ kind: PromptKind, state: MapState, item: String, textID: Int? = nil, aliases: [String: [String]] = [:],
+    /// `sentence`: one sentence at a time, the number of the sentence of `textID` sent as the item.
+    public func run(_ kind: PromptKind, state: MapState, item: String, textID: Int? = nil, sentence: Int? = nil, aliases: [String: [String]] = [:],
                     contextOnly: Bool = false, texts: [Int]? = nil,
                     onEvent: @Sendable (RunEvent) -> Void = { _ in }) async throws -> ModelRun {
         guard let model = settings.model else { throw ModelError.noModel }
         let usesNotation = kind != .clarify && kind != .chat
-        let grammar = usesNotation && settings.useGrammar ? Grammar.build(nodes: state.graph.rootNames, allowEdits: kind == .dedupe || kind == .extract, allowComments: kind == .dedupe) : nil
+        let grammar = usesNotation && settings.useGrammar
+            ? Grammar.build(nodes: state.graph.rootNames, allowEdits: kind == .dedupe || kind == .extract || kind == .sentence,
+                            allowDeletes: kind == .sentence, allowComments: kind == .dedupe, allowEmpty: kind == .sentence)
+            : nil
         var request = ModelRequest(model: model, prompt: prompt(kind, state: state, item: item, contextOnly: contextOnly, texts: texts),
                                    grammar: grammar, temperature: settings.temperature, contextSize: settings.contextSize)
 
-        let options = appendAll ? GateOptions.appendAll(prompt: kind, textID: textID, aliases: aliases) : GateOptions(prompt: kind, textID: textID, aliases: aliases)
+        let options = appendAll ? GateOptions.appendAll(prompt: kind, textID: textID, sentence: sentence, aliases: aliases)
+                                : GateOptions(prompt: kind, textID: textID, sentence: sentence, aliases: aliases)
         var session = GateSession(gate: Gate(options: options), graph: state.graph, evidence: state.proofEvidence)
         var raw = ""
         var promptTokens: Int?

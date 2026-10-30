@@ -287,6 +287,10 @@ public struct SentenceWalk: Equatable, Sendable {
     public var sentences: [Sentence]
     public var index = 0
     public var paused = false
+    /// Going over sentences already on the map again (Check again), not new ones.
+    public var again = false
+    /// Lines the walk has put on the map so far.
+    public var added = 0
 
     public init(textID: Int, sentences: [Sentence]) {
         self.textID = textID
@@ -296,6 +300,16 @@ public struct SentenceWalk: Equatable, Sendable {
     /// A walk over several texts in turn; `textID` is the first.
     public init(sentences: [Sentence]) {
         self.init(textID: sentences.first?.text ?? 0, sentences: sentences)
+    }
+
+    /// Check again: every sentence of the current context, the model's replies aside (they
+    /// are never proof), each sent once more with the map as it stands.
+    public static func again(_ state: MapState) -> SentenceWalk {
+        let replies = state.context.replyTexts
+        let texts = state.modelTexts ?? Array(Set(state.evidence.sentences.map(\.text))).sorted()
+        var walk = SentenceWalk(sentences: texts.filter { !replies.contains($0) }.flatMap { state.evidence.sentences(text: $0) })
+        walk.again = true
+        return walk
     }
 
     public var current: Sentence? { index < sentences.count ? sentences[index] : nil }

@@ -27,7 +27,7 @@ struct MindmapApp: App {
                 Divider()
                 Button("Submit") { model.session?.submit() }.keyboardShortcut(.return, modifiers: .command)
                 Button("Expand selection") { if let s = model.session { s.selection.forEach { s.expand($0) } } }.keyboardShortcut("e", modifiers: .command)
-                Button("Check coverage") { model.session?.checkCoverage() }
+                Button("Check again") { model.session?.checkAgain() }
                 Button("Find duplicates") { model.session?.findDuplicates() }
                 Divider()
                 Menu("Export") {

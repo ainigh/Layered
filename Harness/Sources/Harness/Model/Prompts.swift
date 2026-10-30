@@ -137,26 +137,62 @@ public struct PromptSet: Equatable, Sendable {
             {map}
             output:
             """
-        case .verify:
+        case .sentence:
             return """
-            You check a text against a mind map. For each sentence that states a fact the map lacks, output the sentence number on its own line, then the lines that would add it (same notation as the map; every line @src text). Then, for each node marked @src text that you cannot find in the context, output: missing: <name>. Output nothing else.
-            \(rules)
+            You keep a mind map written in a line notation. You get the whole map and one sentence. Output ONLY the lines to append so the map also says what the sentence says, one per line, nothing else. If the map already says it, output nothing.
+            \(guide)
 
             Example
-            output:
-            s4
-            | ana - reviews | paper @src text @s 4
-            missing: dragon
+            Map:
+            | lea @kind person
+            Sentence:
+            Lea is writing a report, and Tom reviews it on Nov 3.
+            Output:
+            | report @kind thing
+            | lea - writes | report
+            | tom @kind person
+            | tom - reviews | report
+            | report @date 2026-11-03
 
-            Existing nodes: {nodes}
+            Example
+            Map:
+            | lea - writes | report
+            | dragon @kind thing
+            Sentence:
+            There was never a dragon, and the report is really a thesis.
+            Output:
+            | dragon =
+            | report = thesis
+
+            Example
+            Map:
+            | lea - writes | report
+            Sentence:
+            Lea writes the report.
+            Output:
+
             Map:
             {map}
-            Context:
-            {context}
-            output:
+            Sentence:
+            {item}
+            Output:
             """
         }
     }
+
+    /// The compact notation guide one sentence at a time sends: every line form the model
+    /// may write, deletes included, and the naming rules.
+    static let guide = """
+    Notation, one statement per line:
+    | name                      a node
+    | name - verb | name        a link read left to right, labelled with a short phrasal verb (four words or fewer)
+    | name - | name             a link with no label
+    | name @kind person         a note on the last name; kinds: person, place, thing, action, event, idea
+    | name @date 2026-11-03     other notes: @date, @todo, @pref
+    | old = new                 two names for one thing: old becomes new
+    | old =                     delete a node and its links, when the sentence says it is wrong or gone
+    Names: lowercase, singular, no articles; the shortest noun phrase that is still clear; a person by first name; an action as its base verb (review, not reviewing). Use the map's name exactly when it is the same thing. Write only what the sentence says.
+    """
 }
 
 /// Renders the evidence store as the numbered context the prompts expect.
@@ -177,10 +213,9 @@ public enum ContextRenderer {
         return out.joined(separator: "\n")
     }
 
-    /// One sentence, as the sentence-at-a-time mode shows it.
+    /// One sentence, as one sentence at a time sends it: no number, the speaker if known.
     public static func single(_ sentence: Sentence) -> String {
-        let speaker = sentence.speaker.map { " (\($0))" } ?? ""
-        return "s\(sentence.s)\(speaker): \(sentence.sentence)"
+        sentence.speaker.map { "\($0): \(sentence.sentence)" } ?? sentence.sentence
     }
 }
 
@@ -212,35 +247,6 @@ public struct ClarifyQuestion: Equatable, Sendable, Codable {
             if out.count == limit { break }
         }
         return out
-    }
-}
-
-/// Output of the Verify prompt: proposals per sentence, plus `text` nodes the model could not find.
-public struct VerifyReport: Equatable, Sendable {
-    public struct Proposal: Equatable, Sendable {
-        public var sentence: Int
-        public var lines: [String]
-    }
-
-    public var proposals: [Proposal] = []
-    public var missingNodes: [String] = []
-
-    public static func parse(_ output: String) -> VerifyReport {
-        var report = VerifyReport()
-        for raw in output.split(separator: "\n") {
-            let line = Text.collapse(raw)
-            if line.hasPrefix("s"), let n = Int(line.dropFirst()) {
-                report.proposals.append(Proposal(sentence: n, lines: []))
-            } else if line.lowercased().hasPrefix("missing:") {
-                let name = Canonicaliser.canonical(String(line.dropFirst("missing:".count)))
-                if !name.isEmpty { report.missingNodes.append(name) }
-            } else if line.hasPrefix("|") {
-                if report.proposals.isEmpty { report.proposals.append(Proposal(sentence: 0, lines: [])) }
-                report.proposals[report.proposals.count - 1].lines.append(line)
-            }
-        }
-        report.proposals.removeAll { $0.lines.isEmpty }
-        return report
     }
 }
 

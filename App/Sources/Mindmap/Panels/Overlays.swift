@@ -2,8 +2,7 @@ import SwiftUI
 import Harness
 import UniformTypeIdentifiers
 
-/// What opens over the map: a context item, Ask me's questions, Check coverage's report, or
-/// the Add panel (text or audio).
+/// What opens over the map: a context item, Ask me's questions, or the Add panel (text or audio).
 /// The map dims behind it; clicking there, the close button or Esc closes it.
 struct MapOverlay: View {
     @Bindable var session: MapSession
@@ -22,8 +21,6 @@ struct MapOverlay: View {
                     }
                 case .clarify:
                     ClarifyOverlay(session: session)
-                case .coverage:
-                    CoverageOverlay(session: session)
                 case .text:
                     TextOverlay(session: session)
                 case .audio:
@@ -303,52 +300,6 @@ struct ClarifyOverlay: View {
         session.dispatch(.answer(q, text))
         answers = [:]
         session.clarifyQuestions.remove(at: i)
-    }
-}
-
-/// Check coverage's report over the map: facts in the selected context the map lacks, each
-/// with the lines that would add it.
-struct CoverageOverlay: View {
-    @Bindable var session: MapSession
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            OverlayHeader(symbol: "text.badge.checkmark", title: "Coverage", subtitle: "What the selected context states that the map lacks.", close: { session.overlay = nil }) {
-                Button("Check again") { session.checkCoverage() }.controlSize(.small).disabled(session.running != nil)
-            }
-            Divider()
-            ScrollView {
-                if let report = session.verifyReport {
-                    VerifyList(session: session, report: report).padding(Theme.Space.m)
-                }
-            }
-        }
-    }
-}
-
-struct VerifyList: View {
-    @Bindable var session: MapSession
-    let report: VerifyReport
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text(report.proposals.isEmpty ? "Everything in the context is on the map." : "\(report.proposals.count) facts the map lacks").font(Theme.label)
-            ForEach(Array(report.proposals.enumerated()), id: \.offset) { _, proposal in
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                        Text(session.state.evidence.sentences.first { $0.s == proposal.sentence }?.sentence ?? "s\(proposal.sentence)").font(Theme.body)
-                        Text(proposal.lines.joined(separator: "\n")).font(Theme.caption.monospaced()).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Apply") { session.applyProposal(proposal) }.controlSize(.small)
-                }
-                .rowCard()
-            }
-            ForEach(report.missingNodes, id: \.self) { name in
-                Label("\(name) is marked as from the text but the model cannot find it", systemImage: "exclamationmark.triangle").font(Theme.caption).foregroundStyle(.orange)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

@@ -36,7 +36,7 @@ Provenance is a note, so it is plain notation and survives export. A `world` or 
 
 **Proof.** Every `src text` node and edge carries `@text` notes pointing at sentence ids (`@text 3 s12` = text 3, sentence 12). Sentences live in an append-only evidence store in the folder; editing or clearing the text window never touches it. Clicking a node shows the exact sentences it came from; selecting several nodes shows the union, each sentence once, with chips for the nodes it supports. A node with no proof is by definition not a `text` node.
 
-**Coverage.** “Check coverage” asks the model to read the text against the current map and list facts the text states that the map lacks, each as proposed lines with the sentence they come from; the user applies them one by one. Nodes with no sentence support and sentences with no node are shown as two counts on the status bar.
+**Coverage.** “Check again” sends every sentence of the selected context to the model once more, one at a time with the map as it stands, exactly as one sentence at a time does the first time: the model writes what the map still lacks, merges or deletes what the sentence contradicts, or nothing. Nodes with no sentence support and sentences with no node are shown as two counts on the status bar.
 
 **Audio.** A dropped audio file (m4a, mp3, wav, or a voice memo) is transcribed on the machine with whisper.cpp and lands in the Context panel as a transcript with timestamps. Speaker diarization runs after transcription, so each sentence carries a speaker label (Speaker 1, Speaker 2) that clarification can turn into a name. The audio file is kept in the folder, and each transcript sentence keeps its start time, so proof for a node can also play the few seconds of audio it came from.
 
@@ -103,11 +103,11 @@ Headings and attached comments are moved and deleted by the same edit rules as t
 | Prompt | Input | Output | Trigger |
 | --- | --- | --- | --- |
 | Clarify | the context, numbered by sentence, with speaker labels, plus the map by default; a toggle sends the context alone | up to 5 questions, each tied to a sentence number and a reason (unnamed speaker, pronoun, place, time, abbreviation) | “Ask me” pressed by the user; never automatic |
-| Extract | map, context, and the changed paragraphs (or the one sentence) | new lines, every node with `@src text` and `@kind`; the harness attaches `@text` proof | Submit pressed |
+| Extract | map, context, and the changed paragraphs | new lines, every node with `@src text` and `@kind`; the harness attaches `@text` proof | Submit pressed, all at once |
 | Expand | map, context, and the node with its one-hop canonical lines | new lines about that node (edges to or between existing nodes allowed), each `@src text`, `world`, `guess` or `advice` | node clicked (or “expand” in context menu) |
 | Chat | map, context, and the one user message | prose answer in the chat panel; the user’s message is appended to the context as a new paragraph and extracted; a \`\`\`mm block in the reply is applied as `advice` or `world` lines | message sent from the chat panel |
 | Dedupe | map only, with each node’s notes and degree | `old = new` lines for nodes that look like the same thing, each with a one-line reason as a comment | “Find duplicates” pressed; the user confirms each merge |
-| Verify | map and context, numbered by sentence | for each sentence that states a fact the map lacks: the sentence number and the lines that would add it; and any `text` node the model cannot find in the context, flagged for review | “Check coverage” pressed; the user applies proposals one by one |
+| Sentence | the compact notation guide, the whole map, and one sentence; no context | the lines to append so the map says what the sentence says (`old = new` merges, `old =` deletes), or nothing; the harness attaches `@src text` and the sentence as `@text` proof | Submit pressed, one sentence at a time (the default); “Check again” |
 
 **Name stability.** The goal that two models on the same text produce the same names is met by rules, not by hoping:
 
@@ -126,7 +126,7 @@ Headings and attached comments are moved and deleted by the same edit rules as t
 - Never rename or delete existing nodes unless two names clearly mean one thing; then write `old = new`.
 - In Extract, end each line with `@s n` naming the sentence number it came from; the harness turns it into the `@text` proof note. In sentence mode the harness does this itself.
 
-**Submit modes.** Submitted texts get ids (`text 1`, `text 2`). In *all at once* mode paragraphs are hashed and only new or changed ones are sent. In *one sentence at a time* mode the harness splits the text, sends sentence n with the canonical map as it stands after sentence n−1, applies the lines, and continues; a progress bar shows the sentence under consideration and the user can pause. A node’s `@text` notes list every text and paragraph that supports it, so “forget text 2” removes only nodes whose sole support was text 2.
+**Submit modes.** Submitted texts get ids (`text 1`, `text 2`). In *all at once* mode paragraphs are hashed and only new or changed ones are sent. In *one sentence at a time* mode (the default) the harness splits the text, sends sentence n alone (no context) with the notation guide and the canonical map as it stands after sentence n−1, applies the lines, and continues; a progress bar shows the sentence under consideration and the user can pause. A node’s `@text` notes list every text and paragraph that supports it, so “forget text 2” removes only nodes whose sole support was text 2.
 
 **Duplicates.** Because names are global, a near-duplicate is a real error, not a scoping choice. “Find duplicates” runs the Dedupe prompt; proposed `old = new` lines appear as a checklist, and only confirmed ones are appended. The harness also runs its own cheap pass first (plural, article, case, edit distance ≤ 2) and shows those without asking the model.
 
@@ -228,7 +228,7 @@ my-map/
     expand.md
     chat.md
     dedupe.md
-    verify.md
+    sentence.md
   icons/
     manifest.json   keyword → file
     dog.svg
@@ -503,3 +503,13 @@ Ana reviews the paper.
 **The Model log.** The map's bottom right corner, left of the zoom bar, has a **Model log** pill (it counts the requests, and spins while one runs). It opens a drawer listing every request this session sent the model, oldest first: when, the prompt kind, what it was about (`text 3 s5` for a sentence of a walk, a node for Expand), how long it took. Opening one shows the whole prompt as sent (instructions, existing nodes, the map, the context and the item), the model, temperature, context size and whether a grammar went with it (the grammar itself under a disclosure), then the reply as it streams, its token counts, and why it failed or that it was stopped. A run that sends again is one entry per request: the resend without a grammar Ollama refused, and the repair round for lines that did not parse. The newest entry opens as it is sent and the log follows it. **Copy** copies one exchange as plain text, **Copy all** the lot; **Clear** empties it. The log lasts until the project closes (the last 300 requests). Like Notation, opening it closes whichever other floating panel was open.
 
 **Spacing over zoom.** The spacing slider now stands upright on top of the zoom bar, the same width as it (up is more room), with its value in points above it; letting go fills the view again, as before. The right-hand panels stop short of the taller column.
+
+## One sentence at a time by default, Check again instead of Verify (2026-10-30)
+
+**One sentence at a time is the default.** The toggle on the action bar starts lit. Submit splits what is new in an item into sentences and sends each one to the model on its own, in order, with the compact notation guide (every line form, `| old =` included, and the naming rules) and the whole map in canonical notation, as it stands after the sentence before. No context goes with it: not the rest of the text, not the other items. The model answers with the lines to append, or nothing when the map already says it. This is its own prompt, **Sentence** (`prompts/sentence.md`); Extract stays for *all at once*, which still sends the changed paragraphs with the selected context.
+
+**Proof is the sentence sent.** The harness knows which sentence it sent, so every line is proved against that sentence first, whatever the model cites; a line that sentence does not support (a pronoun the model resolved) is proved from another sentence of the same text, or becomes `guess`, as before. Every line gets `@src text` and its `@text` proof from the harness, so the model need not write them.
+
+**The model may delete.** In one sentence at a time the model may write `| old =` to delete a node and its links when the sentence says it is wrong or gone, as well as `| old = new` to merge. A node the user wrote or confirmed (`@src user`) is never deleted by the model, and a name not on the map deletes nothing; both are reported in Held back. The grammar allows the delete and an empty answer. Lines that add nothing the map has are dropped (reported as already in the map), so going over a sentence again adds no repeats.
+
+**Check again replaces Check coverage.** The Verify prompt, its report and its overlay are gone. **Check again** (the first button on the action bar, and Map › Check again) walks every sentence of the selected context again, the model's replies aside, the same way as the first time; the status bar says “Checking sentence n of m”, the walk pauses and resumes like any other, and when it ends a note on the map says how many lines the model wrote (on the map for review) or that the map already says everything. A request that fails pauses the walk: Resume sends that sentence again.

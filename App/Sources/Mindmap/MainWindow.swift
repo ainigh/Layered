@@ -344,6 +344,12 @@ struct MapWindow: View {
         }
     }
 
+    /// How far the right-hand panels stop above the map's bottom: spacing over zoom, with room around it.
+    static let zoomColumnClearance: CGFloat = {
+        let column: CGFloat = ZoomBar.height + SpacingBar.height + Theme.Space.s
+        return column + Theme.Space.m + Theme.Space.m
+    }()
+
     /// One side's pill in its top corner and, when open, its panel floating below it. The
     /// panels stop short of what sits in the bottom corners (Notation; spacing over zoom).
     private func side(_ edge: PanelPlacement.Edge) -> some View {
@@ -357,7 +363,7 @@ struct MapWindow: View {
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.top, Theme.Space.m)
-        .padding(.bottom, leading ? 62 : ZoomBar.height + SpacingBar.height + Theme.Space.s + 2 * Theme.Space.m)
+        .padding(.bottom, leading ? 62 : Self.zoomColumnClearance)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: leading ? .topLeading : .topTrailing)
     }
 

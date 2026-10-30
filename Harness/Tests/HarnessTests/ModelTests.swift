@@ -55,6 +55,7 @@ final class ModelTests: XCTestCase {
         XCTAssertGreaterThan(box.events.filter { if case .chunk = $0 { return true } else { return false } }.count, 3, "text arrives in chunks")
         XCTAssertTrue(box.events.contains(.kept(["| sam @kind person @src text @text 1 s1"])))
         XCTAssertTrue(box.events.contains { if case .heldBack(let e) = $0 { return e.raw == "| nonsense -" } else { return false } })
+        XCTAssertEqual(box.events.first, .sent(run.request), "the request is reported before the reply")
         XCTAssertEqual(box.events.last, .done)
     }
 
@@ -64,8 +65,13 @@ final class ModelTests: XCTestCase {
             .init(kind: .extract, match: "These lines did not parse", response: "| ana - reviews | paper @s 2\n"),
             .init(kind: .extract, response: "| ana - reviews |\n| sam @kind person @s 1\n"),
         ])
-        let run = try await r.run(.extract, state: state(), item: text, textID: 1)
+        let box = EventBox()
+        let run = try await r.run(.extract, state: state(), item: text, textID: 1) { box.append($0) }
         XCTAssertTrue(run.retried)
+        let sent = box.events.compactMap { if case .sent(let request) = $0 { return request.prompt } else { return nil } }
+        XCTAssertEqual(sent.count, 2, "the model log sees the repair round as a request of its own")
+        XCTAssertEqual(sent.first, run.request.prompt)
+        XCTAssertTrue(sent.last?.contains("These lines did not parse") == true)
         XCTAssertEqual(run.gate.lines, [
             "| sam @kind person @src text @text 1 s1",
             "| ana @src text @text 1 s2",
@@ -99,7 +105,35 @@ final class ModelTests: XCTestCase {
         XCTAssertTrue(g.contains("link  ::= seg? term"), "one label per link")
         XCTAssertTrue(g.contains("path  ::= name (link name)* note? note?"), "two notes per path")
         XCTAssertFalse(g.contains("edit"))
-        XCTAssertTrue(Grammar.build(nodes: [], allowEdits: true).contains("edit  ::="))
+        XCTAssertTrue(Grammar.build(nodes: [], allowEdits: true).contains("edit  ::= name \" = \" name"))
+        XCTAssertTrue(g.contains("root  ::= line+"))
+        let sentence = Grammar.build(nodes: [], allowEdits: true, allowDeletes: true, allowEmpty: true)
+        XCTAssertTrue(sentence.contains("edit  ::= name \" =\" (\" \" name)?"), "`| old =` deletes")
+        XCTAssertTrue(sentence.contains("root  ::= line*"), "nothing new is an answer")
+    }
+
+    func testOneSentenceSendsTheMapAndTheSentenceOnly() async throws {
+        var s = reduce(state(), .applyLines(["| sam @kind person @src text @text 1 s1", "| dragon @src text @text 1 s1"], what: "x"), now: fixedDate)
+        let r = runner([.init(kind: .sentence, response: "| ana - reviews | paper\n| dragon =\n")])
+        let sentence = s.evidence.sentence(text: 1, s: 2)!
+        let run = try await r.run(.sentence, state: s, item: ContextRenderer.single(sentence), textID: 1, sentence: 2)
+        let prompt = run.request.prompt
+        XCTAssertTrue(prompt.contains("| old =                     delete a node"), "the compact notation guide goes along")
+        XCTAssertTrue(prompt.contains("Map:\n" + s.canonical), "the whole map")
+        XCTAssertTrue(prompt.hasSuffix("Sentence:\nI'm writing a paper, Ana reviews it on Nov 3.\nOutput:"), "the one sentence")
+        XCTAssertFalse(prompt.contains("I'm Sam."), "no context: not the rest of the text")
+        XCTAssertTrue(run.request.grammar?.contains("root  ::= line*") == true)
+        XCTAssertEqual(run.gate.lines.last, "| dragon =")
+        XCTAssertTrue(run.gate.lines.contains("| ana - reviews @src text @text 1 s2 | paper"))
+        s = reduce(s, .applyRun(run, about: "text 1 s2"), now: fixedDate)
+        XCTAssertNil(s.graph.node("dragon"))
+
+        // Check again walks every sentence of the context, the model's replies aside.
+        s = reduce(s, .addReply("Sure, Ana does.", question: "who?"), now: fixedDate)
+        let walk = SentenceWalk.again(s)
+        XCTAssertTrue(walk.again)
+        XCTAssertEqual(walk.sentences.map(\.s), [1, 2])
+        XCTAssertEqual(Set(walk.sentences.map(\.text)), [1])
     }
 
     func testPromptsAreFilledAndEditable() {
@@ -122,7 +156,7 @@ final class ModelTests: XCTestCase {
         XCTAssertTrue(contextOnly.contains("Map:\n(empty)"))
     }
 
-    func testClarifyVerifyAndChatOutputsParse() {
+    func testClarifyAndChatOutputsParse() {
         let questions = ClarifyQuestion.parse("s1 [speaker] Who is Speaker 1?\ns3 [Pronoun] Who is \"he\"?\njunk\ns9 no reason given\n")
         XCTAssertEqual(questions, [
             ClarifyQuestion(sentence: 1, reason: "speaker", question: "Who is Speaker 1?"),
@@ -130,11 +164,6 @@ final class ModelTests: XCTestCase {
             ClarifyQuestion(sentence: 9, reason: "other", question: "no reason given"),
         ])
         XCTAssertEqual(ClarifyQuestion.parse((1...8).map { "s\($0) [other] q\($0)" }.joined(separator: "\n")).count, 5)
-
-        let report = VerifyReport.parse("s4\n| ana - reviews | paper @src text @s 4\n| paper @kind thing\ns6\nmissing: The Dragons\ns7\n| x | y\n")
-        XCTAssertEqual(report.proposals.map(\.sentence), [4, 7])
-        XCTAssertEqual(report.proposals[0].lines.count, 2)
-        XCTAssertEqual(report.missingNodes, ["dragon"])
 
         let reply = ChatReply.parse("Ana reviews it.\n\n```mm\n| ana - reviews | paper @src world\nnot a line\n```\nThanks.")
         XCTAssertTrue(reply.prose.hasPrefix("Ana reviews it."))

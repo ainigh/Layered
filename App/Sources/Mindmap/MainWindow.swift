@@ -285,6 +285,7 @@ struct MapWindow: View {
                         handleDrop(providers)
                     }
                 NotationDrawer(session: session, model: model)
+                ModelLogDrawer(session: session, model: model)
                 side(.leading)
                 side(.trailing)
                 MapActionBar(session: session)
@@ -344,7 +345,7 @@ struct MapWindow: View {
     }
 
     /// One side's pill in its top corner and, when open, its panel floating below it. The
-    /// panels stop short of what sits in the bottom corners (Notation; spacing and zoom).
+    /// panels stop short of what sits in the bottom corners (Notation; spacing over zoom).
     private func side(_ edge: PanelPlacement.Edge) -> some View {
         let leading = edge == .leading
         return VStack(alignment: leading ? .leading : .trailing, spacing: Theme.Space.s) {
@@ -356,7 +357,7 @@ struct MapWindow: View {
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.top, Theme.Space.m)
-        .padding(.bottom, leading ? 62 : 176)
+        .padding(.bottom, leading ? 62 : ZoomBar.height + SpacingBar.height + Theme.Space.s + 2 * Theme.Space.m)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: leading ? .topLeading : .topTrailing)
     }
 
@@ -651,13 +652,15 @@ struct WalkStatus: View {
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
             ProgressView(value: walk.progress).frame(width: 64).controlSize(.mini)
-            Text("Sentence \(walk.index + 1) of \(walk.sentences.count)").monospacedDigit()
+            Text("\(walk.again ? "Checking sentence" : "Sentence") \(walk.index + 1) of \(walk.sentences.count)").monospacedDigit()
                 .help(walk.current?.sentence ?? "")
             Button(walk.paused ? "Resume" : "Pause") {
                 session.sentenceWalk?.paused.toggle()
                 if session.sentenceWalk?.paused == false { Task { await session.walkSentences() } }
             }
             .controlSize(.small)
+            // Paused while a sentence is with the model: it finishes first, then Resume goes on.
+            .disabled(walk.paused && session.running != nil)
             if walk.paused {
                 Button("Stop") { session.sentenceWalk = nil }.controlSize(.small)
                     .help("Stop here; what is not done stays waiting to be sent")

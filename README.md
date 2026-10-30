@@ -52,7 +52,7 @@ Or open `App/Package.swift` in Xcode for previews and snapshot tests. On first l
 | --- | --- |
 | Parse, compile, canonical form, edits, outline | `Notation/` |
 | Gate (six checks), name canonicaliser, prompts, grammar, Ollama client, runner | `Model/` |
-| `MapState` + `Action` reducer, undo/redo, Optimize, Dedupe, Verify, coverage, proof | `State/` |
+| `MapState` + `Action` reducer, undo/redo, Optimize, Dedupe, coverage, proof | `State/` |
 | Folder storage, context document, submit modes, persistence | `Storage/` |
 | Layout, icons, exports, demo fixtures | `Canvas/` |
 | What the updater compares (versions, releases, commits, the update plan) | `Update/` |

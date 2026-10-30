@@ -2,7 +2,8 @@
 /// append”): parse, names, proof, duplicates, provenance, budget. Nothing is silently
 /// altered: every change or drop is reported as a `GateEvent`.
 public enum PromptKind: String, Sendable, CaseIterable, Codable {
-    case clarify, extract, expand, chat, dedupe, verify
+    /// `sentence` is Extract one sentence at a time: the map and one sentence, no context.
+    case clarify, extract, expand, chat, dedupe, sentence
 }
 
 /// The closed provenance set. Anything else becomes `guess`.
@@ -14,6 +15,9 @@ public struct GateOptions: Sendable {
     public var prompt: PromptKind
     /// The text the model was reading, so `@s n` resolves to `@text id sn`.
     public var textID: Int?
+    /// The one sentence of `textID` the model was given (one sentence at a time): the proof
+    /// looked at first, whatever the model cites.
+    public var sentence: Int?
     /// Aliases from clarification: node name → other strings that name it in the text.
     public var aliases: [String: [String]]
     /// Appends per call; `nil` means unlimited.
@@ -23,9 +27,10 @@ public struct GateOptions: Sendable {
     /// Append a line even when the map already says it (the log allows repeats).
     public var keepDuplicates: Bool
 
-    public init(prompt: PromptKind, textID: Int? = nil, aliases: [String: [String]] = [:], budget: Int?? = nil, labelWordCap: Int = 4, keepDuplicates: Bool = false) {
+    public init(prompt: PromptKind, textID: Int? = nil, sentence: Int? = nil, aliases: [String: [String]] = [:], budget: Int?? = nil, labelWordCap: Int = 4, keepDuplicates: Bool = false) {
         self.prompt = prompt
         self.textID = textID
+        self.sentence = sentence
         self.aliases = aliases
         self.budget = budget ?? GateOptions.defaultBudget(for: prompt)
         self.labelWordCap = labelWordCap
@@ -33,10 +38,14 @@ public struct GateOptions: Sendable {
     }
 
     /// Everything that passes the checks goes on the map, repeats and all, with no budget:
-    /// the user reviews the model's additions on the map itself (`Review`).
-    public static func appendAll(prompt: PromptKind, textID: Int? = nil, aliases: [String: [String]] = [:]) -> GateOptions {
-        GateOptions(prompt: prompt, textID: textID, aliases: aliases, budget: .some(nil), keepDuplicates: true)
+    /// the user reviews the model's additions on the map itself (`Review`). One sentence at
+    /// a time drops repeats: going over the sentences again must add nothing the map has.
+    public static func appendAll(prompt: PromptKind, textID: Int? = nil, sentence: Int? = nil, aliases: [String: [String]] = [:]) -> GateOptions {
+        GateOptions(prompt: prompt, textID: textID, sentence: sentence, aliases: aliases, budget: .some(nil), keepDuplicates: prompt != .sentence)
     }
+
+    /// One sentence at a time may delete a node (`old =`): the sentence says it is wrong or gone.
+    public var allowsDeletes: Bool { prompt == .sentence }
 
     public static func defaultBudget(for prompt: PromptKind) -> Int? {
         switch prompt {
@@ -107,12 +116,25 @@ public struct Gate: Sendable {
 
     // MARK: - Edits
 
-    func gateEdit(_ edit: Edit, known: Set<String>, reasons: inout [String]) -> [String]? {
-        guard let new = edit.new else {
-            reasons.append("deleting is a user action; the model may only merge with `old = new`")
-            return nil
-        }
+    func gateEdit(_ edit: Edit, known: Set<String>, graph: Graph, reasons: inout [String]) -> [String]? {
         let old = Canonicaliser.resolve(edit.old.text, among: known)
+        guard let new = edit.new else {
+            guard options.allowsDeletes else {
+                reasons.append("deleting is a user action; the model may only merge with `old = new`")
+                return nil
+            }
+            guard old.existing else {
+                reasons.append("`\(edit.old.text)` is not a node in the map")
+                return nil
+            }
+            // What the user wrote or confirmed stays until the user deletes it.
+            guard graph.node(old.name)?.note(kind: "src") != Provenance.user.rawValue else {
+                reasons.append("`\(old.name)` is the user's (`@src user`); the model may not delete it")
+                return nil
+            }
+            if let r = old.reason { reasons.append(r) }
+            return [Render.edit(Edit(old: Name(old.name), new: nil))]
+        }
         guard old.existing else {
             reasons.append("`\(edit.old.text)` is not a node in the map")
             return nil
@@ -161,11 +183,13 @@ public struct Gate: Sendable {
         src = takeNote(kind: "src", from: &path.notes) ?? src
         cited = takeSentence(from: &path.notes) ?? cited
         if takeNote(kind: "text", from: &path.notes) != nil { reasons.append("`@text` proof is written by the harness, not the model") }
+        // One sentence at a time: the line came from the sentence the model was given.
+        if let sentence = options.sentence { cited = sentence }
 
         // 5. Provenance.
         var provenance: Provenance
         switch options.prompt {
-        case .extract, .verify:
+        case .extract, .sentence:
             if let src, src != Provenance.text.rawValue {
                 reasons.append("Extract may only write `@src text`, not `@src \(src)`")
                 return nil
@@ -331,7 +355,7 @@ public struct GateSession: Sendable {
         let emitted: [String]
         switch statement {
         case .edit(let edit):
-            guard let lines = gate.gateEdit(edit, known: known, reasons: &reasons) else {
+            guard let lines = gate.gateEdit(edit, known: known, graph: scratch, reasons: &reasons) else {
                 result.events.append(GateEvent(kind: .dropped, raw: raw, reason: reasons.joined(separator: "; ")))
                 return []
             }
@@ -376,6 +400,8 @@ public struct GateSession: Sendable {
         }
 
         scratch = trial
+        // A merge or delete takes names off the map: later lines must not find them there.
+        if case .edit = statement { known = Set(scratch.rootNames) }
         appended += 1
         result.lines += emitted
         if emitted != [raw] {

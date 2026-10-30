@@ -1,9 +1,10 @@
 import SwiftUI
 import Harness
 
-/// The map's actions, floating at its top: Check coverage, Ask me, a box to ask the model
+/// The map's actions, floating at its top: Check again, Ask me, a box to ask the model
 /// or tell it what to add (items go on the map from their own send button in Context), and
-/// two toggles, lit while on: one sentence at a time, and Ask me reads the context only.
+/// two toggles, lit while on: one sentence at a time (on to begin with), and Ask me reads
+/// the context only.
 /// What the model adds goes on the map at once, flagged for review (✓ keeps it, ✕ deletes
 /// it); what it says back as text joins the context as a model item, and a note under the
 /// bar says so. What the model is working on shows in the status bar. Nothing opens over
@@ -16,7 +17,7 @@ struct MapActionBar: View {
         let busy = session.running != nil || session.sentenceWalk != nil
         VStack(spacing: Theme.Space.s) {
             HStack(spacing: Theme.Space.xs) {
-                MapToolButton(symbol: "text.badge.checkmark", help: "Check coverage: what the selected context states that the map lacks") { session.checkCoverage() }
+                MapToolButton(symbol: "text.badge.checkmark", help: "Check again: every sentence of the selected context goes to the model once more, one at a time with the map; it adds what the map lacks, fixes what is wrong, or writes nothing") { session.checkAgain() }
                     .disabled(busy)
                 MapToolButton(symbol: "questionmark.bubble", help: "Ask me: the model asks about gaps in the selected context") { session.askMe() }
                     .disabled(busy)
@@ -34,7 +35,7 @@ struct MapActionBar: View {
                 }
                 Divider().frame(height: 18).padding(.horizontal, 2)
                 MapToolButton(symbol: "list.number",
-                              help: session.sentenceMode ? "One sentence at a time: on. Items go on the map sentence by sentence (click to send all at once)" : "One sentence at a time: off. Items go on the map all at once (click to go sentence by sentence)",
+                              help: session.sentenceMode ? "One sentence at a time: on. Each sentence goes to the model alone with the whole map, and it writes the lines to append (click to send items all at once, with their text as context)" : "One sentence at a time: off. Items go on the map all at once (click to go sentence by sentence)",
                               pressed: session.sentenceMode) { withAnimation(Theme.selection) { session.sentenceMode.toggle() } }
                 MapToolButton(symbol: "doc.text.magnifyingglass",
                               help: session.clarifyContextOnly ? "Ask me reads the context only: on (click to let it read the map too)" : "Ask me reads the context only: off. It reads the map too (click to read the context only)",
@@ -89,7 +90,7 @@ struct ReviewNote: View {
 }
 
 /// A word from the model's last turn: a reply that joined the context, or what Check
-/// coverage found. It never covers the map.
+/// again found. It never covers the map.
 struct NoticeNote: View {
     @Bindable var session: MapSession
     let notice: Notice
@@ -100,9 +101,6 @@ struct NoticeNote: View {
             Text(notice.text).font(Theme.caption).lineLimit(2).frame(maxWidth: 420, alignment: .leading)
             if let id = notice.item {
                 Button("Open") { session.notice = nil; session.open(item: id) }.controlSize(.small)
-            }
-            if notice.report {
-                Button("Report") { session.notice = nil; session.overlay = .coverage }.controlSize(.small)
             }
             Button { session.notice = nil } label: { Image(systemName: "xmark") }
                 .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")

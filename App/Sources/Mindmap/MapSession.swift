@@ -33,9 +33,14 @@ final class MapSession {
     var clarifyQuestions: [ClarifyQuestion] = []
     var clarifyContextOnly = false
     var dedupeProposals: [DedupeProposal] = []
-    var verifyReport: VerifyReport?
     var sentenceWalk: SentenceWalk?
-    var sentenceMode = false
+    /// One sentence at a time (on unless turned off): each sentence goes to the model alone,
+    /// with the whole map and the notation guide, and the model writes what to append.
+    var sentenceMode = true
+    /// Every request this session sent the model and what came back, oldest first (the Model log).
+    var modelLog: [ModelExchange] = []
+    @ObservationIgnored private var runs = 0
+    @ObservationIgnored private var exchanges = 0
     /// The recording being added: its steps and progress, or what went wrong.
     var audioJob: AudioJob?
     /// Recording from the microphone, plain or live.
@@ -50,13 +55,13 @@ final class MapSession {
     /// The recording being added; the next one waits for it.
     @ObservationIgnored private var audioQueue: Task<Void, Never>?
     var viewingTurn: Int?
-    /// What is open over the map: a context item, Ask me's questions, or Check coverage's report.
+    /// What is open over the map: a context item, Ask me's questions, or adding text or audio.
     var overlay: Overlay?
     /// What the model added that the user has not accepted or deleted yet: flagged on the map
     /// with ✓ and ✕. Kept per map between launches.
     var review = Review() { didSet { if review != oldValue { saveReview() } } }
     /// A word from the last model turn, shown on the map rather than over it: a reply to
-    /// open, or what Check coverage found.
+    /// open, or what Check again found.
     var notice: Notice?
     /// Bumped to open the selection's details on the right (selecting alone does not).
     var detailsRequests = 0
@@ -108,7 +113,7 @@ final class MapSession {
             all.append(Work(id: "audio", symbol: "waveform", text: "Transcribing \(job.file.lastPathComponent)", fraction: job.fraction))
         }
         if let walk = sentenceWalk, !walk.paused {
-            all.append(Work(id: "walk", symbol: "list.number", text: "Sentence \(walk.index + 1) of \(walk.sentences.count)", fraction: walk.progress))
+            all.append(Work(id: "walk", symbol: "list.number", text: "\(walk.again ? "Checking sentence" : "Sentence") \(walk.index + 1) of \(walk.sentences.count)", fraction: walk.progress))
         }
         if let running {
             all.append(Work(id: "model", symbol: "cpu", text: running.rawValue.capitalized, since: runningSince))
@@ -334,15 +339,44 @@ final class MapSession {
         }
     }
 
+    /// One sentence at a time: each sentence alone, with the whole map, as the map stands
+    /// after the one before (no context: the rest of the text stays out of the prompt).
     func walkSentences() async {
         while var walk = sentenceWalk, let sentence = walk.current, !walk.paused {
-            guard await run(.extract, item: ContextRenderer.single(sentence), textID: sentence.text, about: "text \(sentence.text) s\(sentence.s)", texts: [sentence.text]) != nil else {
+            let about = "\(walk.again ? "again " : "")text \(sentence.text) s\(sentence.s)"
+            guard let answered = await run(.sentence, item: ContextRenderer.single(sentence), textID: sentence.text, sentence: sentence.s, about: about) else {
                 sentenceWalk?.paused = true
                 return
             }
+            // Paused or stopped while the model was working: keep that.
+            guard let latest = sentenceWalk else { return }
+            walk.paused = latest.paused
+            walk.added += answered.gate.lines.count
             if let done = walk.advance() { dispatch(.markExtracted(textID: done)) }
-            sentenceWalk = walk.isFinished ? nil : walk
+            if walk.isFinished {
+                sentenceWalk = nil
+                if walk.again {
+                    notice = Notice(text: walk.added == 0 ? "Check again: every sentence went to the model once more, and the map already says them all."
+                                    : "Check again: every sentence went to the model once more; it wrote \(walk.added) line\(walk.added == 1 ? "" : "s"), on the map for review.")
+                }
+            } else {
+                sentenceWalk = walk
+            }
         }
+    }
+
+    /// Check again: every sentence of the selected context goes to the model once more,
+    /// one at a time with the map as it stands, the same as the first time. The model writes
+    /// what the map still lacks, merges or deletes what the sentence contradicts, or nothing.
+    func checkAgain() {
+        guard running == nil, sentenceWalk == nil else { return }
+        let walk = SentenceWalk.again(state)
+        guard !walk.isFinished else {
+            notice = Notice(text: "Check again: no sentences selected in Context.")
+            return
+        }
+        sentenceWalk = walk
+        Task { await walkSentences() }
     }
 
     /// Adds a recording: transcribes it on this Mac, finds its speakers, keeps the file in
@@ -642,25 +676,22 @@ final class MapSession {
     }
 
     @discardableResult
-    func run(_ kind: PromptKind, item: String, textID: Int? = nil, about: String, contextOnly: Bool = false, texts: [Int]? = nil) async -> ModelRun? {
+    func run(_ kind: PromptKind, item: String, textID: Int? = nil, sentence: Int? = nil, about: String, contextOnly: Bool = false, texts: [Int]? = nil) async -> ModelRun? {
         running = kind
         runningTokens = 0
         runningSince = Date()
         lastError = nil
+        let logged = logging(kind, about: about)
         let task = Task { [runner, state] in
-            try await runner.run(kind, state: state, item: item, textID: textID, aliases: state.aliases, contextOnly: contextOnly, texts: texts) { [weak self] event in
-                Task { @MainActor in
-                    guard let self else { return }
-                    if case .chunk(let text) = event { self.runningTokens += max(1, text.count / 4) }
-                }
-            }
+            try await runner.run(kind, state: state, item: item, textID: textID, sentence: sentence, aliases: state.aliases, contextOnly: contextOnly, texts: texts, onEvent: logged.onEvent)
         }
         cancelRun = { task.cancel() }
         defer { running = nil; runningSince = nil; cancelRun = nil }
         do {
             let run = try await task.value
+            finishLog(logged.run, with: .success(run))
             switch kind {
-            case .extract, .expand, .verify:
+            case .extract, .expand, .sentence:
                 dispatch(.applyRun(run, about: about))
             case .chat:
                 // The map takes the lines; prose becomes a model item, opened over the map.
@@ -681,11 +712,72 @@ final class MapSession {
             }
             return run
         } catch {
+            finishLog(logged.run, with: .failure(error))
             if !(error is CancellationError) {
                 let raw = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
-                lastError = (raw, "Model request failed", { [weak self] in Task { await self?.run(kind, item: item, textID: textID, about: about, contextOnly: contextOnly, texts: texts) } })
+                // A sentence walk resumes from its own status (Resume); retrying it here would run the sentence twice.
+                var retry: (() -> Void)?
+                if kind != .sentence {
+                    retry = { [weak self] in Task { await self?.run(kind, item: item, textID: textID, about: about, contextOnly: contextOnly, texts: texts) } }
+                }
+                lastError = (raw, "Model request failed", retry)
             }
             return nil
+        }
+    }
+
+    // MARK: - Model log
+
+    /// How many exchanges the log keeps: each holds a whole prompt, map and context included.
+    static let modelLogLimit = 300
+
+    /// A run's number and the handler that logs what it sends and receives as it streams
+    /// (and counts tokens for the status bar).
+    private func logging(_ kind: PromptKind, about: String) -> (run: Int, onEvent: @Sendable (RunEvent) -> Void) {
+        runs += 1
+        let run = runs
+        return (run, { [weak self] event in
+            Task { @MainActor in self?.log(event, run: run, kind: kind, about: about) }
+        })
+    }
+
+    private func log(_ event: RunEvent, run: Int, kind: PromptKind, about: String) {
+        switch event {
+        case .sent(let request):
+            let round = modelLog.filter { $0.run == run }.count + 1
+            // A request sent again (without the grammar, or to repair lines) ends the one before it.
+            if let i = modelLog.lastIndex(where: { $0.run == run && $0.isRunning }) {
+                modelLog[i].status = .done
+                modelLog[i].finished = Date()
+            }
+            exchanges += 1
+            modelLog.append(ModelExchange(id: exchanges, run: run, round: round, kind: kind, about: about, started: Date(), request: request))
+            if modelLog.count > Self.modelLogLimit { modelLog.removeFirst(modelLog.count - Self.modelLogLimit) }
+        case .chunk(let text):
+            runningTokens += max(1, text.count / 4)
+            if let i = modelLog.lastIndex(where: { $0.run == run }) { modelLog[i].response += text }
+        case .kept, .heldBack, .done:
+            break
+        }
+    }
+
+    /// Closes a run's exchanges: answered, stopped, or failed with the error.
+    private func finishLog(_ run: Int, with result: Result<ModelRun, any Error>) {
+        let indices = modelLog.indices.filter { modelLog[$0].run == run }
+        for i in indices where modelLog[i].isRunning {
+            switch result {
+            case .success: modelLog[i].status = .done
+            case .failure(let error) where error is CancellationError: modelLog[i].status = .stopped
+            case .failure(let error): modelLog[i].status = .failed((error as? ModelError).map { "\($0)" } ?? error.localizedDescription)
+            }
+            modelLog[i].finished = Date()
+        }
+        guard case .success(let done) = result, let last = indices.last else { return }
+        modelLog[last].promptTokens = done.promptTokens
+        modelLog[last].responseTokens = done.responseTokens
+        // Ollama refused the grammar: the first request had no reply, and went again without it.
+        if let first = indices.first, first != last, !done.grammarUsed, modelLog[first].request.grammar != nil, modelLog[first].response.isEmpty {
+            modelLog[first].status = .failed("The model rejected the grammar; sent again without it.")
         }
     }
 
@@ -710,42 +802,6 @@ final class MapSession {
     func findDuplicates() {
         dedupeProposals = Dedupe.cheapPass(state.graph)
         Task { await run(.dedupe, item: ModelRunner.nodeList(state.graph), about: "dedupe") }
-    }
-
-    func checkCoverage() {
-        Task {
-            if let run = await runVerify() {
-                // What the map lacks goes straight on it, for review there.
-                var report = VerifyReport.parse(run.rawOutput)
-                let lines = report.proposals.flatMap(\.lines)
-                if !lines.isEmpty {
-                    dispatch(.applyModelOutput(lines.joined(separator: "\n"), prompt: .verify, textID: state.evidence.sentences.last?.text, about: "coverage", appendAll: true))
-                }
-                let found = report.proposals.count
-                report.proposals = []
-                verifyReport = report
-                notice = Notice(text: found == 0 ? "Check coverage: everything in the context is on the map." : "Check coverage put \(found) facts on the map for review.",
-                                report: !report.missingNodes.isEmpty)
-            }
-        }
-    }
-
-    private func runVerify() async -> ModelRun? {
-        running = .verify
-        runningSince = Date()
-        lastError = nil
-        let task = Task { [runner, state] in try await runner.run(.verify, state: state, item: "", aliases: state.aliases) }
-        cancelRun = { task.cancel() }
-        defer { running = nil; runningSince = nil; cancelRun = nil }
-        do {
-            return try await task.value
-        } catch {
-            if !(error is CancellationError) {
-                let raw = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
-                lastError = (raw, "Check coverage failed", { [weak self] in self?.checkCoverage() })
-            }
-            return nil
-        }
     }
 
     // MARK: - Review
@@ -798,18 +854,16 @@ final class MapSession {
         sentenceWalk?.paused = true
     }
 
-    func applyProposal(_ proposal: VerifyReport.Proposal) {
-        let textID = state.evidence.sentences.last?.text
-        dispatch(.applyModelOutput(proposal.lines.joined(separator: "\n"), prompt: .verify, textID: textID, about: "s\(proposal.sentence)", appendAll: true))
-        verifyReport?.proposals.removeAll { $0 == proposal }
-    }
-
     /// Validates an edited prompt by running the example through the fixture client and checking the output parses.
     func validatePrompt(_ kind: PromptKind, _ text: String) -> String? {
         let filled = PromptSet(overrides: [kind: text]).render(kind, map: "", context: "s1: I'm Sam.", nodes: ["sam"], item: "I'm Sam.")
-        for placeholder in ["{map}", "{context}", "{nodes}", "{item}"] where text.contains(placeholder) == false && kind != .dedupe {
-            if placeholder == "{item}" || placeholder == "{context}" { return "the prompt no longer contains \(placeholder); the model would not see the input" }
+        // One sentence at a time reads the map and the sentence; the others read the context.
+        let required: [String] = switch kind {
+        case .dedupe: []
+        case .sentence: ["{item}", "{map}"]
+        default: ["{item}", "{context}"]
         }
+        if let missing = required.first(where: { !text.contains($0) }) { return "the prompt no longer contains \(missing); the model would not see the input" }
         return filled.isEmpty ? "empty prompt" : nil
     }
 
@@ -837,14 +891,11 @@ struct Notice: Equatable {
     var text: String
     /// The context item it is about (a reply), to open.
     var item: Int?
-    /// Check coverage's report has more to show.
-    var report = false
 }
 
 enum Overlay: Equatable {
     case item(Int)
     case clarify
-    case coverage
     /// Add text: a box to paste or type a new item into.
     case text
     /// Add audio: a drop zone, then the recording's steps as it is transcribed.

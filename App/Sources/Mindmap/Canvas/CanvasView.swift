@@ -121,7 +121,8 @@ struct CanvasView: View {
                     .padding(Theme.Space.m)
                     .padding(.bottom, 52)
                 }
-                HStack(alignment: .bottom, spacing: Theme.Space.s) {
+                // The Model log's button sits to their left (`ModelLogDrawer`).
+                VStack(spacing: Theme.Space.s) {
                     SpacingBar(spacing: $spacing) { fillView(restart: true) }
                     ZoomBar(zoomIn: { zoom(by: Theme.Map.zoomStep) }, zoomOut: { zoom(by: 1 / Theme.Map.zoomStep) }, fit: refit,
                             fill: { fillView() }, filling: spreadTask != nil)
@@ -806,6 +807,9 @@ extension CGPoint {
 
 /// Zoom in, zoom out, fit and fill: a small bar in the bottom right corner.
 struct ZoomBar: View {
+    /// Four 28 pt buttons, 2 pt apart, in 3 pt of padding.
+    static let width: CGFloat = 34
+    static let height: CGFloat = 4 * 28 + 3 * 2 + 2 * 3
     let zoomIn: () -> Void
     let zoomOut: () -> Void
     let fit: () -> Void
@@ -825,24 +829,84 @@ struct ZoomBar: View {
     }
 }
 
-/// Spacing: the least room Fill the view leaves between two nodes. Letting go of the
-/// slider fills the view again with the new spacing.
+/// Spacing: the least room Fill the view leaves between two nodes, a vertical slider
+/// standing on the zoom bar (up is more room). Letting go fills the view again with it.
 struct SpacingBar: View {
+    static let height: CGFloat = 150
+    static let range: ClosedRange<Double> = 0...120
     @Binding var spacing: Double
     let changed: () -> Void
 
     var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            Image(systemName: "arrow.left.and.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            Slider(value: $spacing, in: 0...120, step: 2, onEditingChanged: { editing in if !editing { changed() } })
-                .controlSize(.small)
-                .frame(width: 110)
-            Text("\(Int(spacing)) pt").font(Theme.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 38, alignment: .trailing)
+        VStack(spacing: Theme.Space.xs) {
+            Text("\(Int(spacing))").font(Theme.caption).monospacedDigit().foregroundStyle(.secondary)
+            VerticalSlider(value: $spacing, in: Self.range, step: 2, onEnded: changed)
+            Image(systemName: "arrow.left.and.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, Theme.Space.s + 2)
-        .frame(height: 34)
-        .floatingBar(in: Capsule())
-        .help("Spacing between nodes: the least room Fill the view leaves between two nodes")
+        .padding(.vertical, Theme.Space.s)
+        .frame(width: ZoomBar.width, height: Self.height)
+        .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge - 2))
+        .help("Spacing between nodes: the least room Fill the view leaves between two nodes (\(Int(spacing)) pt)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Spacing between nodes")
+        .accessibilityValue("\(Int(spacing)) points")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: spacing = min(spacing + 2, Self.range.upperBound)
+            case .decrement: spacing = max(spacing - 2, Self.range.lowerBound)
+            @unknown default: return
+            }
+            changed()
+        }
+    }
+}
+
+/// A slider standing up: drag or click the track; the bottom is the least.
+struct VerticalSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let onEnded: () -> Void
+    @State private var dragging = false
+    private let knob: CGFloat = 12
+
+    init(value: Binding<Double>, in range: ClosedRange<Double>, step: Double, onEnded: @escaping () -> Void) {
+        _value = value
+        self.range = range
+        self.step = step
+        self.onEnded = onEnded
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let travel = max(geo.size.height - knob, 1)
+            let fraction = (min(max(value, range.lowerBound), range.upperBound) - range.lowerBound) / (range.upperBound - range.lowerBound)
+            let top = travel * CGFloat(1 - fraction)
+            ZStack(alignment: .top) {
+                Capsule().fill(Color.primary.opacity(0.12)).frame(width: 4)
+                Capsule().fill(Theme.accent)
+                    .frame(width: 4, height: max(geo.size.height - top - knob / 2, 0))
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                Circle().fill(Color.white)
+                    .overlay(Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(dragging ? 0.3 : 0.2), radius: dragging ? 2 : 1, y: 0.5)
+                    .frame(width: knob, height: knob)
+                    .offset(y: top)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    dragging = true
+                    let f = 1 - Double(min(max((g.location.y - knob / 2) / travel, 0), 1))
+                    let raw = range.lowerBound + f * (range.upperBound - range.lowerBound)
+                    value = (raw / step).rounded() * step
+                }
+                .onEnded { _ in
+                    dragging = false
+                    onEnded()
+                })
+        }
     }
 }
 

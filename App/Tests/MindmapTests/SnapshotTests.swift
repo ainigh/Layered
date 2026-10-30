@@ -62,9 +62,8 @@ final class SnapshotTests: XCTestCase {
     func testOverlays() throws {
         let session = Fixture.contextSession()
         session.clarifyQuestions = [ClarifyQuestion(sentence: 1, reason: "pronoun", question: "Who is \"they\"?")]
-        session.verifyReport = VerifyReport.parse("s2\n| kim - chairs | workshop @src text @s 2")
         session.audioJob = AudioJob(file: URL(fileURLWithPath: "/tmp/meeting.m4a"), step: .transcribing(0.4))
-        let overlays: [(String, Overlay)] = [("item", .item(1)), ("reply", .item(session.state.context.items.last!.id)), ("clarify", .clarify), ("coverage", .coverage), ("audio", .audio)]
+        let overlays: [(String, Overlay)] = [("item", .item(1)), ("reply", .item(session.state.context.items.last!.id)), ("clarify", .clarify), ("audio", .audio)]
         for (name, overlay) in overlays {
             for dark in [false, true] {
                 try snapshot("overlay-\(name)", MapOverlay(session: session, overlay: overlay), width: 900, height: 640, dark: dark)

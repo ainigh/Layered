@@ -241,7 +241,7 @@ public enum Action: Equatable, Sendable {
     case applyModelOutput(String, prompt: PromptKind, textID: Int?, about: String, appendAll: Bool = false)
     /// Append what a finished `ModelRun` produced (the gate already ran while streaming).
     case applyRun(ModelRun, about: String)
-    /// Append lines the user chose (a suggestion, an applied Verify proposal, an imported `.mm`).
+    /// Append lines the user chose (a suggestion, an imported `.mm`).
     case applyLines([String], what: String)
     case rename(String, to: String)
     case delete(String)

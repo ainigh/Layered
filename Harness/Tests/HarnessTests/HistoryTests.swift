@@ -176,14 +176,28 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(state.graph.comments.last?.text, "both name the manuscript")
     }
 
-    func testVerifyProposalsApplyThroughTheGate() {
-        var state = reduce(MapState(), .submitText("I'm Sam. Ana reviews the paper."), now: fixedDate)
-        let report = VerifyReport.parse("s2\n| ana - reviews | paper @src text @s 2\nmissing: sam")
-        for proposal in report.proposals {
-            state = reduce(state, .applyModelOutput(proposal.lines.joined(separator: "\n"), prompt: .verify, textID: 1, about: "s\(proposal.sentence)"), now: fixedDate)
-        }
-        XCTAssertEqual(state.graph.rootNames, ["ana", "paper"])
-        XCTAssertEqual(state.graph.edge("ana", "paper")?.notes, ["src text", "text 1 s2"])
+    func testOneSentenceAtATimeProvesFromItsSentenceAndMayDelete() {
+        var state = reduce(MapState(), .submitText("I'm Sam. Ana reviews the paper. There is no dragon."), now: fixedDate)
+        state = reduce(state, .applyLines(["| dragon @src text @text 1 s3", "| kim @src user", "| sam @src text @text 1 s1"], what: "x"), now: fixedDate)
+        let options = GateOptions.appendAll(prompt: .sentence, textID: 1, sentence: 2)
+        let output = "| ana - reviews | paper @s 9\n| dragons =\n| kim =\n| ghost =\n| sam\n"
+        let result = Gate.run(output, graph: state.graph, evidence: state.proofEvidence, options: options)
+        XCTAssertEqual(result.lines, [
+            "| ana @src text @text 1 s2",
+            "| paper @src text @text 1 s2",
+            "| ana - reviews @src text @text 1 s2 | paper",
+            "| dragon =",
+        ], "proof is the sentence sent, whatever the model cites; the model may delete")
+        let reasons = result.events.filter { $0.kind == .dropped }.map(\.reason)
+        XCTAssertTrue(reasons.contains { $0.contains("the model may not delete it") }, "what the user wrote stays")
+        XCTAssertTrue(reasons.contains { $0.contains("`ghost` is not a node") })
+        XCTAssertTrue(reasons.contains("already in the map"), "going over a sentence again adds no repeats")
+
+        state = reduce(state, .applyLines(result.lines, what: "sentence"), now: fixedDate)
+        XCTAssertNil(state.graph.node("dragon"))
+        XCTAssertNotNil(state.graph.node("kim"))
+        // Extract (all at once) still may not delete.
+        XCTAssertTrue(Gate.run("| sam =", graph: state.graph, evidence: state.proofEvidence, options: .appendAll(prompt: .extract, textID: 1)).lines.isEmpty)
     }
 
     func testOutlineTree() throws {

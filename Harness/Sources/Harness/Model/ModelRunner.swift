@@ -31,6 +31,8 @@ public struct ModelRun: Equatable, Sendable {
 
 /// Events emitted while a run streams, so the UI can draw lines as they parse.
 public enum RunEvent: Equatable, Sendable {
+    /// A request went to the model: the first, the resend without a grammar, or the repair.
+    case sent(ModelRequest)
     case chunk(String)
     case kept([String])
     case heldBack(GateEvent)
@@ -82,6 +84,7 @@ public struct ModelRunner: Sendable {
 
         func stream(_ req: ModelRequest) async throws {
             var lines = LineAccumulator()
+            onEvent(.sent(req))
             for try await chunk in client.generate(req) {
                 raw += chunk.text
                 onEvent(.chunk(chunk.text))

@@ -74,10 +74,12 @@ final class AppModel {
     /// The folder the user keeps their maps in; each folder inside is a project.
     var workspace: Workspace?
     /// The panel each side pane shows; a side with none is closed. One floating panel is
-    /// open at a time: a side pane or the Notation drawer.
+    /// open at a time: a side pane, the Notation drawer or the Model log.
     var shownPanels: [PanelPlacement.Edge: Panel] = [.leading: .context]
     /// The Notation drawer, in the map's bottom left corner, is open.
     var notationOpen = false
+    /// The Model log, in the map's bottom right corner beside zoom, is open.
+    var logOpen = false
     /// What a closed pane showed last, so opening it again brings that back.
     @ObservationIgnored private var lastShown: [PanelPlacement.Edge: Panel] = [.leading: .context, .trailing: .details]
     /// The panes an overlay closed, to bring back when it closes.
@@ -136,6 +138,7 @@ final class AppModel {
     func show(_ panel: Panel, session: MapSession) {
         shownPanels = [panel.edge: panel]
         notationOpen = false
+        logOpen = false
         lastShown[panel.edge] = panel
     }
 
@@ -143,21 +146,29 @@ final class AppModel {
     func toggleNotation() {
         withAnimation(Theme.slide) {
             notationOpen.toggle()
-            if notationOpen { shownPanels = [:] }
+            if notationOpen { shownPanels = [:]; logOpen = false }
+        }
+    }
+
+    /// Opens or closes the Model log; opening it closes the side panes and the Notation drawer.
+    func toggleLog() {
+        withAnimation(Theme.slide) {
+            logOpen.toggle()
+            if logOpen { shownPanels = [:]; notationOpen = false }
         }
     }
 
     /// Something opened over the map: the panes and the drawer close; the panes come back when it closes.
     func coverPanes() {
         covered = shownPanels
-        withAnimation(Theme.slide) { shownPanels = [:]; notationOpen = false }
+        withAnimation(Theme.slide) { shownPanels = [:]; notationOpen = false; logOpen = false }
     }
 
     /// The overlay closed: the pane it closed comes back, unless the user opened another since.
     func uncoverPanes() {
         guard let covered else { return }
         withAnimation(Theme.slide) {
-            if shownPanels.isEmpty, !notationOpen { shownPanels = covered }
+            if shownPanels.isEmpty, !notationOpen, !logOpen { shownPanels = covered }
         }
         self.covered = nil
     }

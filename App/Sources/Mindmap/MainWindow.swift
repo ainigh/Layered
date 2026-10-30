@@ -285,6 +285,7 @@ struct MapWindow: View {
                         handleDrop(providers)
                     }
                 NotationDrawer(session: session, model: model)
+                ModelLogDrawer(session: session, model: model)
                 side(.leading)
                 side(.trailing)
                 MapActionBar(session: session)
@@ -344,7 +345,7 @@ struct MapWindow: View {
     }
 
     /// One side's pill in its top corner and, when open, its panel floating below it. The
-    /// panels stop short of what sits in the bottom corners (Notation; spacing and zoom).
+    /// panels stop short of what sits in the bottom corners (Notation; spacing over zoom).
     private func side(_ edge: PanelPlacement.Edge) -> some View {
         let leading = edge == .leading
         return VStack(alignment: leading ? .leading : .trailing, spacing: Theme.Space.s) {
@@ -356,7 +357,7 @@ struct MapWindow: View {
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.top, Theme.Space.m)
-        .padding(.bottom, leading ? 62 : 176)
+        .padding(.bottom, leading ? 62 : ZoomBar.height + SpacingBar.height + Theme.Space.s + 2 * Theme.Space.m)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: leading ? .topLeading : .topTrailing)
     }
 

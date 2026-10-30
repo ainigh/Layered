@@ -55,6 +55,7 @@ final class ModelTests: XCTestCase {
         XCTAssertGreaterThan(box.events.filter { if case .chunk = $0 { return true } else { return false } }.count, 3, "text arrives in chunks")
         XCTAssertTrue(box.events.contains(.kept(["| sam @kind person @src text @text 1 s1"])))
         XCTAssertTrue(box.events.contains { if case .heldBack(let e) = $0 { return e.raw == "| nonsense -" } else { return false } })
+        XCTAssertEqual(box.events.first, .sent(run.request), "the request is reported before the reply")
         XCTAssertEqual(box.events.last, .done)
     }
 
@@ -64,8 +65,13 @@ final class ModelTests: XCTestCase {
             .init(kind: .extract, match: "These lines did not parse", response: "| ana - reviews | paper @s 2\n"),
             .init(kind: .extract, response: "| ana - reviews |\n| sam @kind person @s 1\n"),
         ])
-        let run = try await r.run(.extract, state: state(), item: text, textID: 1)
+        let box = EventBox()
+        let run = try await r.run(.extract, state: state(), item: text, textID: 1) { box.append($0) }
         XCTAssertTrue(run.retried)
+        let sent = box.events.compactMap { if case .sent(let request) = $0 { return request.prompt } else { return nil } }
+        XCTAssertEqual(sent.count, 2, "the model log sees the repair round as a request of its own")
+        XCTAssertEqual(sent.first, run.request.prompt)
+        XCTAssertTrue(sent.last?.contains("These lines did not parse") == true)
         XCTAssertEqual(run.gate.lines, [
             "| sam @kind person @src text @text 1 s1",
             "| ana @src text @text 1 s2",

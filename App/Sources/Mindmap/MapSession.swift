@@ -36,6 +36,10 @@ final class MapSession {
     var verifyReport: VerifyReport?
     var sentenceWalk: SentenceWalk?
     var sentenceMode = false
+    /// Every request this session sent the model and what came back, oldest first (the Model log).
+    var modelLog: [ModelExchange] = []
+    @ObservationIgnored private var runs = 0
+    @ObservationIgnored private var exchanges = 0
     /// The recording being added: its steps and progress, or what went wrong.
     var audioJob: AudioJob?
     /// Recording from the microphone, plain or live.
@@ -647,18 +651,15 @@ final class MapSession {
         runningTokens = 0
         runningSince = Date()
         lastError = nil
+        let logged = logging(kind, about: about)
         let task = Task { [runner, state] in
-            try await runner.run(kind, state: state, item: item, textID: textID, aliases: state.aliases, contextOnly: contextOnly, texts: texts) { [weak self] event in
-                Task { @MainActor in
-                    guard let self else { return }
-                    if case .chunk(let text) = event { self.runningTokens += max(1, text.count / 4) }
-                }
-            }
+            try await runner.run(kind, state: state, item: item, textID: textID, aliases: state.aliases, contextOnly: contextOnly, texts: texts, onEvent: logged.onEvent)
         }
         cancelRun = { task.cancel() }
         defer { running = nil; runningSince = nil; cancelRun = nil }
         do {
             let run = try await task.value
+            finishLog(logged.run, with: .success(run))
             switch kind {
             case .extract, .expand, .verify:
                 dispatch(.applyRun(run, about: about))
@@ -681,11 +682,67 @@ final class MapSession {
             }
             return run
         } catch {
+            finishLog(logged.run, with: .failure(error))
             if !(error is CancellationError) {
                 let raw = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
                 lastError = (raw, "Model request failed", { [weak self] in Task { await self?.run(kind, item: item, textID: textID, about: about, contextOnly: contextOnly, texts: texts) } })
             }
             return nil
+        }
+    }
+
+    // MARK: - Model log
+
+    /// How many exchanges the log keeps: each holds a whole prompt, map and context included.
+    static let modelLogLimit = 300
+
+    /// A run's number and the handler that logs what it sends and receives as it streams
+    /// (and counts tokens for the status bar).
+    private func logging(_ kind: PromptKind, about: String) -> (run: Int, onEvent: @Sendable (RunEvent) -> Void) {
+        runs += 1
+        let run = runs
+        return (run, { [weak self] event in
+            Task { @MainActor in self?.log(event, run: run, kind: kind, about: about) }
+        })
+    }
+
+    private func log(_ event: RunEvent, run: Int, kind: PromptKind, about: String) {
+        switch event {
+        case .sent(let request):
+            let round = modelLog.filter { $0.run == run }.count + 1
+            // A request sent again (without the grammar, or to repair lines) ends the one before it.
+            if let i = modelLog.lastIndex(where: { $0.run == run && $0.isRunning }) {
+                modelLog[i].status = .done
+                modelLog[i].finished = Date()
+            }
+            exchanges += 1
+            modelLog.append(ModelExchange(id: exchanges, run: run, round: round, kind: kind, about: about, started: Date(), request: request))
+            if modelLog.count > Self.modelLogLimit { modelLog.removeFirst(modelLog.count - Self.modelLogLimit) }
+        case .chunk(let text):
+            runningTokens += max(1, text.count / 4)
+            if let i = modelLog.lastIndex(where: { $0.run == run }) { modelLog[i].response += text }
+        case .kept, .heldBack, .done:
+            break
+        }
+    }
+
+    /// Closes a run's exchanges: answered, stopped, or failed with the error.
+    private func finishLog(_ run: Int, with result: Result<ModelRun, any Error>) {
+        let indices = modelLog.indices.filter { modelLog[$0].run == run }
+        for i in indices where modelLog[i].isRunning {
+            switch result {
+            case .success: modelLog[i].status = .done
+            case .failure(let error) where error is CancellationError: modelLog[i].status = .stopped
+            case .failure(let error): modelLog[i].status = .failed((error as? ModelError).map { "\($0)" } ?? error.localizedDescription)
+            }
+            modelLog[i].finished = Date()
+        }
+        guard case .success(let done) = result, let last = indices.last else { return }
+        modelLog[last].promptTokens = done.promptTokens
+        modelLog[last].responseTokens = done.responseTokens
+        // Ollama refused the grammar: the first request had no reply, and went again without it.
+        if let first = indices.first, first != last, !done.grammarUsed, modelLog[first].request.grammar != nil, modelLog[first].response.isEmpty {
+            modelLog[first].status = .failed("The model rejected the grammar; sent again without it.")
         }
     }
 
@@ -734,12 +791,16 @@ final class MapSession {
         running = .verify
         runningSince = Date()
         lastError = nil
-        let task = Task { [runner, state] in try await runner.run(.verify, state: state, item: "", aliases: state.aliases) }
+        let logged = logging(.verify, about: "coverage")
+        let task = Task { [runner, state] in try await runner.run(.verify, state: state, item: "", aliases: state.aliases, onEvent: logged.onEvent) }
         cancelRun = { task.cancel() }
         defer { running = nil; runningSince = nil; cancelRun = nil }
         do {
-            return try await task.value
+            let run = try await task.value
+            finishLog(logged.run, with: .success(run))
+            return run
         } catch {
+            finishLog(logged.run, with: .failure(error))
             if !(error is CancellationError) {
                 let raw = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
                 lastError = (raw, "Check coverage failed", { [weak self] in self?.checkCoverage() })

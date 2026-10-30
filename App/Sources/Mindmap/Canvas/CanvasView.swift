@@ -807,9 +807,9 @@ extension CGPoint {
 
 /// Zoom in, zoom out, fit and fill: a small bar in the bottom right corner.
 struct ZoomBar: View {
-    /// Four 28 pt buttons, 2 pt apart, in 3 pt of padding.
+    /// Four 28 pt buttons, 2 pt apart, in 3 pt of padding: 4 × 28 + 3 × 2 + 2 × 3.
     static let width: CGFloat = 34
-    static let height: CGFloat = 4 * 28 + 3 * 2 + 2 * 3
+    static let height: CGFloat = 124
     let zoomIn: () -> Void
     let zoomOut: () -> Void
     let fit: () -> Void

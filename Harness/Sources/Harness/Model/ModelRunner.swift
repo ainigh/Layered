@@ -107,12 +107,15 @@ public struct ModelRunner: Sendable {
 
         func stream(_ req: ModelRequest) async throws {
             var lines = LineAccumulator()
+            // Thinking is off, but a model that thinks anyway keeps it out of the answer.
+            var thinking = ThinkFilter()
             onEvent(.sent(req))
             for try await chunk in client.generate(req) {
-                raw += chunk.text
-                onEvent(.chunk(chunk.text))
+                let text = thinking.feed(chunk.text)
+                raw += text
+                onEvent(.chunk(text))
                 if usesNotation {
-                    for line in lines.feed(chunk.text) { feed(line) }
+                    for line in lines.feed(text) { feed(line) }
                 }
                 if chunk.done {
                     promptTokens = chunk.promptTokens ?? promptTokens
@@ -121,7 +124,12 @@ public struct ModelRunner: Sendable {
             }
             // A stopped stream ends without an error: stop here, so nothing half-read is applied.
             try Task.checkCancellation()
-            if usesNotation { for line in lines.flush() { feed(line) } }
+            let rest = thinking.flush()
+            raw += rest
+            if usesNotation {
+                for line in lines.feed(rest) { feed(line) }
+                for line in lines.flush() { feed(line) }
+            }
         }
 
         func feed(_ line: String) {

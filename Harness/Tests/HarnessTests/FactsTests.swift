@@ -131,3 +131,25 @@ final class FactsTests: XCTestCase {
         XCTAssertTrue(next.graph.nodes.values.allSatisfy { $0.note(kind: "src") == "text" })
     }
 }
+
+final class ThinkingTests: XCTestCase {
+    func testThinkBlocksNeverReachTheAnswer() {
+        var f = ThinkFilter()
+        let chunks = ["<thi", "nk>Hmm, she is", " Ana.</th", "ink>\n\ns1: Ana", " likes <b>it</b>.<", "x"]
+        let out = chunks.map { f.feed($0) }.joined() + f.flush()
+        XCTAssertEqual(out, "\n\ns1: Ana likes <b>it</b>.<x")
+        var open = ThinkFilter()
+        XCTAssertEqual(open.feed("ok <think>never closed"), "ok ")
+        XCTAssertEqual(open.flush(), "")
+    }
+
+    func testAThinkingModelStillGivesFacts() async throws {
+        let state = reduce(MapState(), .submitText("Ana writes a paper."), now: fixedDate)
+        let client = FixtureClient(recordings: [.init(kind: .facts, response: "<think>\nThe | subject is ana.\n</think>\ns1: ana (person) | writes | paper (thing)\n")])
+        let run = try await ModelRunner(client: client, settings: ModelSettings(model: "fixture"), appendAll: true)
+            .run(.facts, state: state, item: "s1: Ana writes a paper.", textID: 1)
+        XCTAssertFalse(run.rawOutput.contains("think"))
+        XCTAssertEqual(run.gate.lines.count, 3)
+        XCTAssertTrue(run.gate.events.isEmpty || !run.gate.events.contains { $0.raw.contains("subject is") })
+    }
+}

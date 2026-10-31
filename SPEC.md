@@ -538,3 +538,7 @@ What a passage says goes on the map as soon as its facts are in, as one turn (ma
 **No speaker identification.** Transcribing no longer looks for speakers (the “Find who is speaking” step and its second whisper pass are gone): a transcript is what was said, line by line with its times. Speaker names on older transcripts still show.
 
 This replaces “Text from audio goes to the model in one request” above: audio is read in passages like everything else.
+
+## Thinking off (2026-10-31)
+
+Every request to Ollama goes with `"think": false`, so a thinking model (qwen3, deepseek-r1…) answers at once instead of reasoning at length first; builds and models without thinking ignore it. A model that thinks anyway, writing `<think>…</think>` into its answer, has that part dropped as it streams (a tag split across chunks waits for the rest), so it never reaches Read, Facts or the gate, nor the Model log's reply.

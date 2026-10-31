@@ -162,3 +162,37 @@ public struct LineAccumulator: Sendable {
         return buffer.isEmpty ? [] : [buffer]
     }
 }
+
+/// Drops `<think>…</think>` from streamed text: what a thinking model reasons before it
+/// answers. A tag split across chunks waits for the rest.
+public struct ThinkFilter: Sendable {
+    private var inside = false
+    private var pending = ""
+
+    public init() {}
+
+    public mutating func feed(_ text: String) -> String {
+        pending += text
+        var out = ""
+        while true {
+            let tag = inside ? "</think>" : "<think>"
+            if let r = pending.range(of: tag) {
+                if !inside { out += pending[..<r.lowerBound] }
+                pending = String(pending[r.upperBound...])
+                inside.toggle()
+                continue
+            }
+            // The end might be the start of a tag: keep it for the next chunk.
+            let keep = (1..<tag.count).reversed().first { pending.hasSuffix(tag.prefix($0)) } ?? 0
+            if !inside { out += pending.dropLast(keep) }
+            pending = String(pending.suffix(keep))
+            return out
+        }
+    }
+
+    /// The end of the stream: what was held back, unless it was inside a think block.
+    public mutating func flush() -> String {
+        defer { pending = "" }
+        return inside ? "" : pending
+    }
+}

@@ -21,6 +21,9 @@ public struct OllamaClient: ModelClient {
         var model: String
         var prompt: String
         var stream = true
+        /// Thinking off: a thinking model (qwen3, deepseek-r1…) answers at once instead of
+        /// reasoning at length first. Builds without the field ignore it.
+        var think = false
         var grammar: String?
         var options: Options
         struct Options: Encodable {

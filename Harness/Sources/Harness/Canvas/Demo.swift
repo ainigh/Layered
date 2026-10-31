@@ -49,6 +49,11 @@ public enum Demo {
             .init(kind: .sentence, match: "Sentence:\nI'm Sam.", response: "| sam @kind person\n", promptTokens: 400, responseTokens: 6),
             .init(kind: .sentence, match: "Sentence:\nI'm writing a paper", response: "| paper @kind thing\n| sam - writes | paper\n| ana @kind person\n| ana - reviews | paper\n| paper @date 2026-11-03\n", promptTokens: 420, responseTokens: 40),
             .init(kind: .sentence, response: "", promptTokens: 400, responseTokens: 1),
+            // Reading the tiny demo's text in passages; any other passage reads as nothing.
+            .init(kind: .read, match: "s1: I'm Sam.", response: "s1: Sam is the speaker.\ns2: Sam is writing a paper.\ns2: Ana reviews the paper on Nov 3.\n", promptTokens: 300, responseTokens: 24),
+            .init(kind: .read, response: "", promptTokens: 300, responseTokens: 1),
+            .init(kind: .facts, match: "s2: Sam is writing a paper.", response: "s1: sam (person)\ns2: sam | writes | paper (thing)\ns2: ana (person) | reviews | paper\ns2: paper | is reviewed on | nov 3 (event)\n", promptTokens: 250, responseTokens: 40),
+            .init(kind: .facts, response: "", promptTokens: 250, responseTokens: 1),
             .init(kind: .extract, response: "| sam @kind person @src text @s 1\n| paper @kind thing @src text @s 2\n| sam - writes | paper @src text @s 2\n| ana @kind person @src text @s 2\n| ana - reviews | paper @src text @s 2\n", promptTokens: 800, responseTokens: 60),
         ], installed: [ModelInfo(name: "demo", sizeBytes: 0)])
     }

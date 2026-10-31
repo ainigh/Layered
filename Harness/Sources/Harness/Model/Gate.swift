@@ -3,7 +3,10 @@
 /// altered: every change or drop is reported as a `GateEvent`.
 public enum PromptKind: String, Sendable, CaseIterable, Codable {
     /// `sentence` is Extract one sentence at a time: the map and one sentence, no context.
-    case clarify, extract, expand, chat, dedupe, sentence
+    /// `read` and `facts` are reading a passage: `read` rewrites it as plain standalone
+    /// sentences (pronouns replaced), `facts` turns those into `subject | relation | object`
+    /// lines the harness converts to notation (`Facts`).
+    case clarify, extract, expand, chat, dedupe, sentence, read, facts
 }
 
 /// The closed provenance set. Anything else becomes `guess`.
@@ -26,6 +29,10 @@ public struct GateOptions: Sendable {
     public var labelWordCap: Int
     /// Append a line even when the map already says it (the log allows repeats).
     public var keepDuplicates: Bool
+    /// How `read` rewrote sentences of `textID` (by sentence number): a line is proved by
+    /// the sentence or by its reading, so `ana` proves from “She reviews it” read as
+    /// “Ana reviews the paper”.
+    public var readings: [Int: String] = [:]
 
     public init(prompt: PromptKind, textID: Int? = nil, sentence: Int? = nil, aliases: [String: [String]] = [:], budget: Int?? = nil, labelWordCap: Int = 4, keepDuplicates: Bool = false) {
         self.prompt = prompt
@@ -41,7 +48,7 @@ public struct GateOptions: Sendable {
     /// the user reviews the model's additions on the map itself (`Review`). One sentence at
     /// a time drops repeats: going over the sentences again must add nothing the map has.
     public static func appendAll(prompt: PromptKind, textID: Int? = nil, sentence: Int? = nil, aliases: [String: [String]] = [:]) -> GateOptions {
-        GateOptions(prompt: prompt, textID: textID, sentence: sentence, aliases: aliases, budget: .some(nil), keepDuplicates: prompt != .sentence)
+        GateOptions(prompt: prompt, textID: textID, sentence: sentence, aliases: aliases, budget: .some(nil), keepDuplicates: prompt != .sentence && prompt != .facts)
     }
 
     /// One sentence at a time may delete a node (`old =`): the sentence says it is wrong or gone.
@@ -189,7 +196,7 @@ public struct Gate: Sendable {
         // 5. Provenance.
         var provenance: Provenance
         switch options.prompt {
-        case .extract, .sentence:
+        case .extract, .sentence, .facts:
             if let src, src != Provenance.text.rawValue {
                 reasons.append("Extract may only write `@src text`, not `@src \(src)`")
                 return nil
@@ -276,7 +283,8 @@ public struct Gate: Sendable {
 
     func mentions(_ sentence: Sentence, _ name: String) -> Bool {
         let speaker = sentence.speaker.map { " " + Gate.matchable($0) } ?? ""
-        let hay = " " + Gate.matchable(sentence.sentence) + speaker + " "
+        let reading = sentence.text == options.textID ? options.readings[sentence.s].map { " " + Gate.matchable($0) } ?? "" : ""
+        let hay = " " + Gate.matchable(sentence.sentence) + speaker + reading + " "
         return ([name] + (options.aliases[name] ?? [])).contains { candidate in
             let m = Gate.matchable(candidate)
             guard !m.isEmpty else { return false }
@@ -298,7 +306,8 @@ public struct Gate: Sendable {
 
 /// A gate that checks lines one at a time as they stream in from the model.
 public struct GateSession: Sendable {
-    public let gate: Gate
+    /// Settable between lines: reading a passage proves each fact against its own sentence.
+    public var gate: Gate
     public private(set) var result = GateResult()
     private var scratch: Graph
     private let evidence: EvidenceStore

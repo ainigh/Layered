@@ -3,7 +3,7 @@ import Harness
 
 /// The map's actions, floating at its top: Check again, Ask me, a box to ask the model
 /// or tell it what to add (items go on the map from their own send button in Context), and
-/// two toggles, lit while on: one sentence at a time (on to begin with), and Ask me reads
+/// two toggles, lit while on: step by step (on to begin with), and Ask me reads
 /// the context only.
 /// What the model adds goes on the map at once, flagged for review (✓ keeps it, ✕ deletes
 /// it); what it says back as text joins the context as a model item, and a note under the
@@ -35,7 +35,7 @@ struct MapActionBar: View {
                 }
                 Divider().frame(height: 18).padding(.horizontal, 2)
                 MapToolButton(symbol: "list.number",
-                              help: session.sentenceMode ? "One sentence at a time: on. Each sentence goes to the model alone with the whole map, and it writes the lines to append (click to send items all at once, with their text as context)" : "One sentence at a time: off. Items go on the map all at once (click to go sentence by sentence)",
+                              help: session.sentenceMode ? "Step by step: on. Items are read a few sentences at a time: the model rewrites them in plain sentences, then writes their facts, and each passage goes on the map as it is done (click to send items all at once)" : "Step by step: off. Each item goes to the model in one request (click to read a few sentences at a time)",
                               pressed: session.sentenceMode) { withAnimation(Theme.selection) { session.sentenceMode.toggle() } }
                 MapToolButton(symbol: "doc.text.magnifyingglass",
                               help: session.clarifyContextOnly ? "Ask me reads the context only: on (click to let it read the map too)" : "Ask me reads the context only: off. It reads the map too (click to read the context only)",

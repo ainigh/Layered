@@ -43,8 +43,8 @@ struct PromptDiff: View {
         let removed = al.filter { !bl.contains($0) }, added = bl.filter { !al.contains($0) }
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
-                ForEach(removed, id: \.self) { Text("- \($0)").font(Theme.caption.monospaced()).foregroundStyle(.red) }
-                ForEach(added, id: \.self) { Text("+ \($0)").font(Theme.caption.monospaced()).foregroundStyle(.green) }
+                ForEach(removed, id: \.self) { Text("- \($0)").font(Theme.caption.monospaced()).foregroundStyle(.red).textSelection(.enabled) }
+                ForEach(added, id: \.self) { Text("+ \($0)").font(Theme.caption.monospaced()).foregroundStyle(.green).textSelection(.enabled) }
             }
         }.frame(maxHeight: 160)
     }

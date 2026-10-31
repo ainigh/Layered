@@ -256,6 +256,14 @@ public struct ContextDocument: Equatable, Sendable {
         items.filter { $0.selected && !$0.removed }.compactMap(\.textID)
     }
 
+    /// Text the model may still read: the latest text of an item that is not deleted. A
+    /// deleted item's text, or a version an edit replaced, is not. A text no item holds
+    /// (imported evidence, tests) is.
+    public func isCurrent(text: Int) -> Bool {
+        guard let item = item(forText: text) else { return true }
+        return !item.removed && item.textID == text
+    }
+
     /// Text ids the model wrote. Its replies are context the user may select, never proof.
     public var replyTexts: Set<Int> {
         Set(textParagraphs.filter { $0.kind == .model }.compactMap(\.textID))
@@ -315,6 +323,19 @@ public struct SentenceWalk: Equatable, Sendable {
     public var current: Sentence? { index < sentences.count ? sentences[index] : nil }
     public var isFinished: Bool { index >= sentences.count }
     public var progress: Double { sentences.isEmpty ? 1 : Double(index) / Double(sentences.count) }
+
+    /// Moves past the sentences whose text was deleted since the walk began (the item
+    /// deleted, or the text replaced by an edit): the model never reads them. Returns how
+    /// many it passed.
+    @discardableResult
+    public mutating func skipDeleted(_ context: ContextDocument) -> Int {
+        var skipped = 0
+        while let s = current, !context.isCurrent(text: s.text) {
+            index += 1
+            skipped += 1
+        }
+        return skipped
+    }
 
     /// Moves on; returns the text id whose last sentence was just done, if one was.
     @discardableResult

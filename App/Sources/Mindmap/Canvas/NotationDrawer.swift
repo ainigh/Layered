@@ -206,11 +206,11 @@ struct HeldBackList: View {
                                 .padding(.horizontal, 6).padding(.vertical, 1)
                                 .background((event.kind == .dropped ? Color.red : Color.secondary).opacity(0.15), in: Capsule())
                                 .foregroundStyle(event.kind == .dropped ? Color.red : Color.secondary)
-                            Text(event.raw).font(Theme.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                            Text(event.raw).font(Theme.caption.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         }
-                        Text(event.reason).font(Theme.caption).foregroundStyle(.secondary)
+                        Text(event.reason).font(Theme.caption).foregroundStyle(.secondary).textSelection(.enabled)
                         if !event.result.isEmpty {
-                            Text(event.result.joined(separator: "\n")).font(Theme.caption.monospaced()).foregroundStyle(.tertiary)
+                            Text(event.result.joined(separator: "\n")).font(Theme.caption.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled)
                         }
                         if event.kind == .deferred {
                             Button("Apply") { session.dispatch(.applyLines(event.result, what: "suggestion")) }.controlSize(.small)

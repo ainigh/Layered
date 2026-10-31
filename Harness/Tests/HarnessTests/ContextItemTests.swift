@@ -145,6 +145,31 @@ final class ContextItemTests: XCTestCase {
         XCTAssertNil(walk.advance())
     }
 
+    func testDeletedTextIsNotCurrent() {
+        var state = three()
+        XCTAssertEqual([1, 2, 3].map { state.context.isCurrent(text: $0) }, [true, true, true])
+        XCTAssertTrue(state.context.isCurrent(text: 99), "a text no item holds")
+        state = reduce(state, .removeContext(2), now: fixedDate)
+        XCTAssertFalse(state.context.isCurrent(text: 2), "its item is deleted")
+        state = reduce(state, .reviseContext(1, "Sam writes the thesis."), now: fixedDate)
+        XCTAssertFalse(state.context.isCurrent(text: 1), "an edit replaced it")
+        XCTAssertTrue(state.context.isCurrent(text: 4), "the edit's text is")
+        state = reduce(state, .restoreContext(2), now: fixedDate)
+        XCTAssertTrue(state.context.isCurrent(text: 2), "restored")
+    }
+
+    func testSentenceWalkSkipsDeletedText() {
+        let state = reduce(three(), .removeContext(1), now: fixedDate)
+        var walk = SentenceWalk(sentences: [Sentence(text: 1, s: 1, sentence: "A."), Sentence(text: 1, s: 2, sentence: "B."),
+                                            Sentence(text: 2, s: 1, sentence: "C."), Sentence(text: 1, s: 3, sentence: "D.")])
+        XCTAssertEqual(walk.skipDeleted(state.context), 2)
+        XCTAssertEqual(walk.current?.sentence, "C.")
+        XCTAssertEqual(walk.skipDeleted(state.context), 0, "text 2 is still there")
+        walk.advance()
+        XCTAssertEqual(walk.skipDeleted(state.context), 1)
+        XCTAssertTrue(walk.isFinished)
+    }
+
     func testEventsReachTheFolder() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("layered-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }

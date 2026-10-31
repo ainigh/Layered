@@ -48,6 +48,12 @@ final class MapSession {
     @ObservationIgnored private var recorder: LiveRecorder?
     /// The live map's own Extract is running (so Stop now can cancel it).
     @ObservationIgnored private var liveExtracting = false
+    /// Submit is going through its items, one request after another.
+    @ObservationIgnored private var submitting = false
+    /// The texts the running request reads: its own and the context it was sent.
+    @ObservationIgnored private var runningReads: Set<Int> = []
+    /// The running request was stopped because a text it reads was deleted.
+    @ObservationIgnored private var stoppedForDeletion = false
     /// How loud the microphone is now, 0 to 1 (read on a timer, not observed).
     var recordingLevel: Float { recorder?.level ?? 0 }
     /// Recordings this session added, by text id (a demo keeps them where they were dropped).
@@ -237,6 +243,12 @@ final class MapSession {
         next.errors.forEach { try? storage.appendErrorLog($0) }
         state = next
         pendingWrites = Persistence.sync(before: before, after: next, storage: storage)
+        // Text deleted (its item, or replaced by an edit) while the model reads it: stop the
+        // request, so nothing it says from that text reaches the map.
+        if !stoppedForDeletion, runningReads.contains(where: { !next.context.isCurrent(text: $0) }) {
+            stoppedForDeletion = true
+            cancelRun?()
+        }
         // What a model turn adds goes on the map at once; the user accepts or deletes it there.
         switch action {
         case .applyRun, .applyModelOutput: review.mark(from: before.graph, to: next.graph)
@@ -308,10 +320,13 @@ final class MapSession {
     var pendingItems: [ContextItem] { state.context.pendingItems }
 
     /// Extracts every selected item that is new or edited since it went on the map; with
-    /// `only`, just that item. One sentence at a time walks their sentences in turn.
+    /// `only`, just that item. One sentence at a time walks their sentences in turn, except
+    /// text from audio: a transcript goes to the model whole, in one request, so what it
+    /// says is on the map as soon as the model answers once.
     func submit(only: Int? = nil) {
         let items = pendingItems.filter { only == nil || $0.id == only }
-        guard !items.isEmpty, running == nil, sentenceWalk == nil else { return }
+        guard !items.isEmpty, running == nil, sentenceWalk == nil, !submitting else { return }
+        let audio = Set(items.filter { $0.kind == .transcript }.compactMap(\.textID))
         let requests: [(textID: Int, text: String)] = items.compactMap { item in
             guard let id = item.textID else { return nil }
             let request = Submit.request(for: item)
@@ -320,48 +335,80 @@ final class MapSession {
             return (id, request)
         }
         guard !requests.isEmpty else { return }
-        if sentenceMode {
-            // Only the sentences of what changed (all of them the first time).
-            sentenceWalk = SentenceWalk(sentences: requests.flatMap { r in
+        let whole = sentenceMode ? requests.filter { audio.contains($0.textID) } : requests
+        let walked = sentenceMode ? requests.filter { !audio.contains($0.textID) } : []
+        submitting = true
+        Task {
+            let finished = await extract(whole)
+            submitting = false
+            guard finished, !walked.isEmpty, running == nil, sentenceWalk == nil else { return }
+            // Only the sentences of what changed (all of them the first time), of what is
+            // still there.
+            var walk = SentenceWalk(sentences: walked.filter { state.context.isCurrent(text: $0.textID) }.flatMap { r in
                 let all = state.evidence.sentences(text: r.textID)
                 let changed = all.filter { r.text.contains($0.sentence) }
                 return changed.isEmpty ? all : changed
             })
-            Task { await walkSentences() }
-        } else {
-            Task {
-                for r in requests {
-                    if await run(.extract, item: r.text, textID: r.textID, about: "text \(r.textID)") != nil {
-                        dispatch(.markExtracted(textID: r.textID))
-                    } else { break }
-                }
+            walk.skipDeleted(state.context)
+            guard !walk.isFinished else { return }
+            sentenceWalk = walk
+            await walkSentences()
+        }
+    }
+
+    /// Each text in one request, in turn. A text deleted before its turn, or while the
+    /// model reads it, is left out. False when a request failed or was stopped.
+    private func extract(_ requests: [(textID: Int, text: String)]) async -> Bool {
+        for r in requests where state.context.isCurrent(text: r.textID) {
+            if await run(.extract, item: r.text, textID: r.textID, about: "text \(r.textID)") != nil {
+                dispatch(.markExtracted(textID: r.textID))
+            } else if state.context.isCurrent(text: r.textID) {
+                return false
             }
         }
+        return true
     }
 
     /// One sentence at a time: each sentence alone, with the whole map, as the map stands
     /// after the one before (no context: the rest of the text stays out of the prompt).
     func walkSentences() async {
-        while var walk = sentenceWalk, let sentence = walk.current, !walk.paused {
-            let about = "\(walk.again ? "again " : "")text \(sentence.text) s\(sentence.s)"
-            guard let answered = await run(.sentence, item: ContextRenderer.single(sentence), textID: sentence.text, sentence: sentence.s, about: about) else {
-                sentenceWalk?.paused = true
+        while var walk = sentenceWalk, !walk.paused {
+            // Text deleted since the walk began is never sent.
+            walk.skipDeleted(state.context)
+            guard let sentence = walk.current else {
+                finishWalk(walk)
                 return
             }
+            let about = "\(walk.again ? "again " : "")text \(sentence.text) s\(sentence.s)"
+            let answered = await run(.sentence, item: ContextRenderer.single(sentence), textID: sentence.text, sentence: sentence.s, about: about)
             // Paused or stopped while the model was working: keep that.
             guard let latest = sentenceWalk else { return }
             walk.paused = latest.paused
-            walk.added += answered.gate.lines.count
-            if let done = walk.advance() { dispatch(.markExtracted(textID: done)) }
-            if walk.isFinished {
-                sentenceWalk = nil
-                if walk.again {
-                    notice = Notice(text: walk.added == 0 ? "Check again: every sentence went to the model once more, and the map already says them all."
-                                    : "Check again: every sentence went to the model once more; it wrote \(walk.added) line\(walk.added == 1 ? "" : "s"), on the map for review.")
+            if answered == nil {
+                // Its text was deleted while the model read it: go on with the next one.
+                guard !walk.paused, !state.context.isCurrent(text: sentence.text) else {
+                    sentenceWalk?.paused = true
+                    return
                 }
+                walk.advance()
+                sentenceWalk = walk
+                continue
+            }
+            walk.added += answered?.gate.lines.count ?? 0
+            if let done = walk.advance(), state.context.isCurrent(text: done) { dispatch(.markExtracted(textID: done)) }
+            if walk.isFinished {
+                finishWalk(walk)
             } else {
                 sentenceWalk = walk
             }
+        }
+    }
+
+    private func finishWalk(_ walk: SentenceWalk) {
+        sentenceWalk = nil
+        if walk.again {
+            notice = Notice(text: walk.added == 0 ? "Check again: every sentence went to the model once more, and the map already says them all."
+                            : "Check again: every sentence went to the model once more; it wrote \(walk.added) line\(walk.added == 1 ? "" : "s"), on the map for review.")
         }
     }
 
@@ -369,7 +416,7 @@ final class MapSession {
     /// one at a time with the map as it stands, the same as the first time. The model writes
     /// what the map still lacks, merges or deletes what the sentence contradicts, or nothing.
     func checkAgain() {
-        guard running == nil, sentenceWalk == nil else { return }
+        guard running == nil, sentenceWalk == nil, !submitting else { return }
         let walk = SentenceWalk.again(state)
         guard !walk.isFinished else {
             notice = Notice(text: "Check again: no sentences selected in Context.")
@@ -597,7 +644,7 @@ final class MapSession {
         recording?.heard.append(contentsOf: transcript.segments.map(\.text))
         // The model takes one request at a time: wait for the one under way (a paused
         // sentence walk is not one), unless the user stops the live map now.
-        while running != nil || sentenceWalk?.paused == false {
+        while running != nil || submitting || sentenceWalk?.paused == false {
             guard going() else { return }
             recording?.status = "Waiting for the model…"
             try? await Task.sleep(for: .milliseconds(300))
@@ -650,6 +697,16 @@ final class MapSession {
     /// Opens an item over the map.
     func open(item id: Int) { overlay = .item(id) }
 
+    /// An item's text to copy: as written, or a transcript line by line with when each was
+    /// said and who said it (by name, once named).
+    func copyText(of item: ContextItem) -> String {
+        guard item.kind == .transcript, let t = item.textID.flatMap({ state.transcripts[$0] }) else { return item.body }
+        return t.segments.map { seg in
+            let who = seg.speaker.map { (state.speakers.name(for: $0) ?? $0) + ": " } ?? ""
+            return "[\(Clock.stamp(seg.t0))] \(who)\(seg.text)"
+        }.joined(separator: "\n")
+    }
+
     /// Selects the nodes an item's texts support.
     func selectIdeas(of item: ContextItem) {
         let texts = Set(item.textIDs)
@@ -677,18 +734,26 @@ final class MapSession {
 
     @discardableResult
     func run(_ kind: PromptKind, item: String, textID: Int? = nil, sentence: Int? = nil, about: String, contextOnly: Bool = false, texts: [Int]? = nil) async -> ModelRun? {
+        // A text deleted meanwhile is not sent.
+        if let textID, !state.context.isCurrent(text: textID) { return nil }
+        let texts = texts?.filter { state.context.isCurrent(text: $0) }
+        if texts?.isEmpty == true, kind == .clarify { return nil }
         running = kind
         runningTokens = 0
         runningSince = Date()
         lastError = nil
+        stoppedForDeletion = false
+        runningReads = Set(textID.map { [$0] } ?? []).union(kind == .sentence ? [] : (texts ?? state.modelTexts ?? []))
         let logged = logging(kind, about: about)
         let task = Task { [runner, state] in
             try await runner.run(kind, state: state, item: item, textID: textID, sentence: sentence, aliases: state.aliases, contextOnly: contextOnly, texts: texts, onEvent: logged.onEvent)
         }
         cancelRun = { task.cancel() }
-        defer { running = nil; runningSince = nil; cancelRun = nil }
+        defer { running = nil; runningSince = nil; cancelRun = nil; runningReads = [] }
         do {
             let run = try await task.value
+            // It answered just as a text it read was deleted: none of it goes on the map.
+            if stoppedForDeletion { throw CancellationError() }
             finishLog(logged.run, with: .success(run))
             switch kind {
             case .extract, .expand, .sentence:
@@ -713,6 +778,14 @@ final class MapSession {
             return run
         } catch {
             finishLog(logged.run, with: .failure(error))
+            // Stopped because a text it read was deleted: its own text still there, it goes
+            // again without the deleted one; its own text gone, it is left out.
+            if stoppedForDeletion {
+                stoppedForDeletion = false
+                guard textID.map({ state.context.isCurrent(text: $0) }) ?? true else { return nil }
+                running = nil
+                return await run(kind, item: item, textID: textID, sentence: sentence, about: about, contextOnly: contextOnly, texts: texts)
+            }
             if !(error is CancellationError) {
                 let raw = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
                 // A sentence walk resumes from its own status (Resume); retrying it here would run the sentence twice.

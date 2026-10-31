@@ -142,6 +142,8 @@ struct ContextItemMenu: View {
     let item: ContextItem
 
     var body: some View {
+        Button("Copy text") { Clipboard.copy(session.copyText(of: item)) }
+        Divider()
         if item.removed {
             Button("Restore") { session.dispatch(.restoreContext(item.id)) }
         } else {
@@ -223,18 +225,18 @@ struct OutlinePanel: View {
                                     if let i = session.ui.collapsedHeadings.firstIndex(of: item.title) { session.ui.collapsedHeadings.remove(at: i) } else { session.ui.collapsedHeadings.append(item.title) }
                                     session.saveUI()
                                 } label: { Image(systemName: session.ui.collapsedHeadings.contains(item.title) ? "chevron.right" : "chevron.down") }.buttonStyle(.plain)
-                                Text(item.title).font(Theme.label)
+                                Text(item.title).font(Theme.label).textSelection(.enabled)
                             }
                             .padding(.leading, CGFloat(item.level - 1) * Theme.Space.m)
                         }
                         if !session.ui.collapsedHeadings.contains(item.title) {
-                            ForEach(item.comments, id: \.self) { Text($0).font(Theme.caption).italic().foregroundStyle(.secondary).padding(.leading, CGFloat(item.level) * Theme.Space.m) }
+                            ForEach(item.comments, id: \.self) { Text($0).font(Theme.caption).italic().foregroundStyle(.secondary).textSelection(.enabled).padding(.leading, CGFloat(item.level) * Theme.Space.m) }
                             ForEach(item.nodes, id: \.self) { name in
                                 VStack(alignment: .leading, spacing: 1) {
                                     Button { session.selection = [name] } label: {
                                         HStack { NodeChip(name: name, graph: session.state.graph); Spacer() }
                                     }.buttonStyle(.plain)
-                                    ForEach(Outline.comments(attachedTo: name, in: session.state.graph), id: \.self) { Text($0).font(Theme.caption).italic().padding(.leading, Theme.Space.m) }
+                                    ForEach(Outline.comments(attachedTo: name, in: session.state.graph), id: \.self) { Text($0).font(Theme.caption).italic().textSelection(.enabled).padding(.leading, Theme.Space.m) }
                                 }
                                 .padding(.leading, CGFloat(item.level) * Theme.Space.m)
                                 .draggable(name)

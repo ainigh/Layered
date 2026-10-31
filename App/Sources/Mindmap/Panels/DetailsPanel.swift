@@ -66,8 +66,8 @@ struct NodeDetails: View {
             let comments = Outline.comments(attachedTo: name, in: graph)
             if !notes.isEmpty || !comments.isEmpty {
                 SectionTitle("Notes")
-                ForEach(notes, id: \.self) { Text($0).font(Theme.caption) }
-                ForEach(comments, id: \.self) { Text($0).font(Theme.caption).italic().foregroundStyle(.secondary) }
+                ForEach(notes, id: \.self) { Text($0).font(Theme.caption).textSelection(.enabled) }
+                ForEach(comments, id: \.self) { Text($0).font(Theme.caption).italic().foregroundStyle(.secondary).textSelection(.enabled) }
             }
 
             let edges = graph.edges(touching: node.id).sorted { $0.key < $1.key }
@@ -111,7 +111,7 @@ struct EdgeDetails: View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.xs) {
                 NodeChip(name: edge.a.name, graph: graph)
-                Text(edge.labels.isEmpty ? "–" : edge.labels.joined(separator: ", ")).font(Theme.body)
+                Text(edge.labels.isEmpty ? "–" : edge.labels.joined(separator: ", ")).font(Theme.body).textSelection(.enabled)
                 NodeChip(name: edge.b.name, graph: graph)
             }
             Pill(text: Provenance.title(edge.note(kind: "src")), tint: Provenance.tint(edge.note(kind: "src")))
@@ -120,8 +120,8 @@ struct EdgeDetails: View {
             let comments = graph.comments.filter { $0.attachedTo == .edge(edge.key) }.map(\.text)
             if !notes.isEmpty || !comments.isEmpty {
                 SectionTitle("Notes")
-                ForEach(notes, id: \.self) { Text($0).font(Theme.caption) }
-                ForEach(comments, id: \.self) { Text($0).font(Theme.caption).italic().foregroundStyle(.secondary) }
+                ForEach(notes, id: \.self) { Text($0).font(Theme.caption).textSelection(.enabled) }
+                ForEach(comments, id: \.self) { Text($0).font(Theme.caption).italic().foregroundStyle(.secondary).textSelection(.enabled) }
             }
         }
     }

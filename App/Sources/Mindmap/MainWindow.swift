@@ -698,6 +698,7 @@ struct RecordingStatus: View {
             if recording.live, let last = recording.heard.last {
                 Text("“\(last)”").italic().lineLimit(1).truncationMode(.head).frame(maxWidth: 220, alignment: .leading)
                     .help(recording.heard.suffix(4).joined(separator: " "))
+                    .contextMenu { Button("Copy what it heard") { Clipboard.copy(recording.heard.joined(separator: " ")) } }
             }
             Button(recording.stopping ? "Stop now" : "Stop") { session.stopRecording() }
                 .controlSize(.small)

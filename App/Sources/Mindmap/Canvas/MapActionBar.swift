@@ -98,7 +98,8 @@ struct NoticeNote: View {
     var body: some View {
         HStack(spacing: Theme.Space.s) {
             Image(systemName: "text.bubble").foregroundStyle(.secondary)
-            Text(notice.text).font(Theme.caption).lineLimit(2).frame(maxWidth: 420, alignment: .leading)
+            Text(notice.text).font(Theme.caption).lineLimit(2).textSelection(.enabled).frame(maxWidth: 420, alignment: .leading)
+                .help(notice.text)
             if let id = notice.item {
                 Button("Open") { session.notice = nil; session.open(item: id) }.controlSize(.small)
             }
@@ -121,7 +122,7 @@ struct ErrorNote: View {
         HStack(spacing: Theme.Space.s) {
             Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.red)
             VStack(alignment: .leading, spacing: 1) {
-                Text(message).font(Theme.label)
+                Text(message).font(Theme.label).textSelection(.enabled)
                 Text(raw).font(Theme.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
             }
             .frame(maxWidth: 420, alignment: .leading)

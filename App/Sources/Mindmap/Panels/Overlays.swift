@@ -76,6 +76,8 @@ struct ItemOverlay: View {
     @State private var draft = ""
     @State private var clarification = ""
     @State private var speakerNames: [String: String] = [:]
+    /// The transcript as one block of text, to select across lines and copy.
+    @State private var transcriptAsText = false
 
     var body: some View {
         let style = Theme.origin(item.origin)
@@ -90,7 +92,7 @@ struct ItemOverlay: View {
             Divider()
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 if let q = item.question {
-                    Text("You asked: \(q)").font(Theme.label).foregroundStyle(.secondary)
+                    Text("You asked: \(q)").font(Theme.label).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 if item.kind == .transcript {
                     transcript
@@ -126,6 +128,8 @@ struct ItemOverlay: View {
 
     private var footer: some View {
         HStack(spacing: Theme.Space.s) {
+            Button { Clipboard.copy(item.kind == .transcript ? session.copyText(of: item) : draft) } label: { Label("Copy", systemImage: "doc.on.doc") }
+                .help(item.kind == .transcript ? "Copy the transcript, each line with its time and speaker" : "Copy the text")
             if item.removed {
                 Button("Restore") { session.dispatch(.restoreContext(item.id)) }
             } else {
@@ -165,10 +169,22 @@ struct ItemOverlay: View {
                 .controlSize(.small)
             }
             Text("Text from audio can't be edited, so it stays in step with the recording.").font(Theme.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            if t != nil {
+                Picker("", selection: $transcriptAsText) {
+                    Text("Lines").tag(false)
+                    Text("Text").tag(true)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
+                .help("Lines: each plays from where it was said. Text: the whole transcript, to select across lines and copy")
+            }
         }
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                if let t {
+                if t != nil, transcriptAsText {
+                    Text(session.copyText(of: item)).font(Theme.body).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if let t {
                     ForEach(Array(t.segments.enumerated()), id: \.offset) { _, seg in
                         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                             if let audio {
@@ -181,10 +197,14 @@ struct ItemOverlay: View {
                             } else {
                                 Text(Clock.stamp(seg.t0)).monospacedDigit().foregroundStyle(.secondary)
                             }
-                            if let sp = seg.speaker { Text(session.state.speakers.name(for: sp) ?? sp).font(Theme.label).foregroundStyle(Theme.origin(.audio).color) }
+                            if let sp = seg.speaker { Text(session.state.speakers.name(for: sp) ?? sp).font(Theme.label).foregroundStyle(Theme.origin(.audio).color).textSelection(.enabled) }
                             Text(seg.text).font(Theme.body).textSelection(.enabled)
                         }
                         .font(Theme.caption)
+                        .contextMenu {
+                            Button("Copy line") { Clipboard.copy(seg.text) }
+                            Button("Copy the transcript") { Clipboard.copy(session.copyText(of: item)) }
+                        }
                     }
                 } else {
                     Text(item.body).font(Theme.body).textSelection(.enabled)
@@ -268,8 +288,8 @@ struct ClarifyOverlay: View {
                     ForEach(Array(session.clarifyQuestions.enumerated()), id: \.offset) { i, q in
                         VStack(alignment: .leading, spacing: Theme.Space.xs) {
                             Text("\(q.reason) · s\(q.sentence)").font(Theme.label).foregroundStyle(.secondary)
-                            Text(sentence(q.sentence)).font(Theme.caption).foregroundStyle(.tertiary).lineLimit(2)
-                            Text(q.question).font(Theme.body)
+                            Text(sentence(q.sentence)).font(Theme.caption).foregroundStyle(.tertiary).lineLimit(2).textSelection(.enabled)
+                            Text(q.question).font(Theme.body).textSelection(.enabled)
                             HStack {
                                 TextField("answer", text: Binding(get: { answers[i] ?? "" }, set: { answers[i] = $0 }))
                                     .textFieldStyle(.roundedBorder)

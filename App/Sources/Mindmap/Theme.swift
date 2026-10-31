@@ -193,6 +193,14 @@ enum Appearance: String, CaseIterable, Identifiable {
     }
 }
 
+/// Copying text anywhere in the app: the item, a transcript, a node's name.
+enum Clipboard {
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
 extension Theme {
     /// The colours a node's name can give its icons (`IconTint`): a few distinct system colours,
     /// which read in light and dark.

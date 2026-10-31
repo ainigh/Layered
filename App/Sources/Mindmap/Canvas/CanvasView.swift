@@ -738,10 +738,12 @@ struct CanvasView: View {
             }
             if session.layout[name]?.pinned == true { Button("Release pin") { session.dispatch(.release(name)) } }
             Button("Show details") { session.selection = [name]; session.detailsRequests += 1 }
+            Button("Copy name") { Clipboard.copy(name) }
             Divider()
             Button("Delete", role: .destructive) { session.dispatch(.delete(name)); session.selection = [] }
         } else if names.count > 1 {
             Button("Expand \(names.count) nodes") { names.forEach { session.expand($0) } }
+            Button("Copy \(names.count) names") { Clipboard.copy(names.joined(separator: "\n")) }
             Divider()
             Button("Delete \(names.count) nodes", role: .destructive) { names.forEach { session.dispatch(.delete($0)) }; session.selection = [] }
         } else if let key = session.selectedEdge, let edge = graph.edges[key] {
@@ -754,6 +756,7 @@ struct CanvasView: View {
                 Button("Confirm") { session.dispatch(.applyLines(["| \(edge.a.name) @src user - | \(edge.b.name)"], what: "confirm edge")) }
             }
             Button("Add comment…") { commentTarget = edge.a.name }
+            Button("Copy link") { Clipboard.copy([edge.a.name, edge.labels.joined(separator: ", "), edge.b.name].filter { !$0.isEmpty }.joined(separator: " – ")) }
             Divider()
             Button("Delete link", role: .destructive) {
                 // The notation removes an edge only with a node: Transition rebuilds the endpoint without it.

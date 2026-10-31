@@ -1,4 +1,4 @@
-/// Six prompts, one notation (SPEC “Model layer”). The defaults live here; a folder
+/// Eight prompts, one notation (SPEC “Model layer”). The defaults live here; a folder
 /// can override any of them with `prompts/<kind>.md`. Placeholders: `{map}`,
 /// `{context}`, `{nodes}`, `{item}`.
 public struct PromptSet: Equatable, Sendable {
@@ -136,6 +136,63 @@ public struct PromptSet: Equatable, Sendable {
             Map:
             {map}
             output:
+            """
+        case .read:
+            return """
+            You rewrite a passage in plain sentences, so that a script can turn it into a mind map. Write every sentence of the passage again as one or more short sentences that each say one thing and make sense on their own:
+            - Replace every pronoun (he, she, it, they, we, I, you, this, that, here, there…) with the person, place or thing it means. The sentences before the passage and the known names tell you who or what that is. I, me and my are the one speaking: use their name once the text gives it, otherwise write “the speaker”.
+            - Split a sentence that says several things into several sentences.
+            - Keep to what the text says; add nothing. Use a known name exactly when it is the same thing.
+            - Leave out filler that says nothing (um, okay, you know, thanks).
+            Start each line with the number of the sentence it comes from. Output nothing else.
+
+            Example
+            Known names: (none)
+            Before:
+            (empty)
+            Passage:
+            s1: I'm Sam, and I'm writing a paper.
+            s2: Ana reviews it on Nov 3, she's my supervisor.
+            s3: Um, okay.
+            Output:
+            s1: Sam is writing a paper.
+            s2: Ana reviews the paper on Nov 3.
+            s2: Ana is Sam's supervisor.
+
+            Known names: {nodes}
+            Before:
+            {context}
+            Passage:
+            {item}
+            Output:
+            """
+        case .facts:
+            return """
+            You turn plain sentences into facts for a mind map. For each sentence write its facts, one per line, in exactly one of these forms, starting with the sentence's number:
+            s<n>: subject (kind) | relation | object (kind)
+            s<n>: name (kind)
+            - subject, object, name: the shortest noun phrase that is still clear; lowercase, singular, no articles; a person by first name. Use a known name exactly when it is the same thing.
+            - kind: person, place, thing, action, event or idea. Write it after a name the first time the name appears.
+            - relation: a short verb phrase, four words or fewer, read from subject to object (writes, reviews, lives in, is part of, happens on).
+            - A date, time or amount is an object too (nov 3, 9 am, 20 people).
+            Write only what the sentences say. Output nothing else.
+
+            Example
+            Known names: sam
+            Sentences:
+            s1: Sam is writing a paper.
+            s2: Ana reviews the paper on Nov 3.
+            s2: Ana is Sam's supervisor.
+            Output:
+            s1: sam (person) | writes | paper (thing)
+            s2: ana (person) | reviews | paper
+            s2: paper | is reviewed on | nov 3 (event)
+            s2: ana | supervises | sam
+
+            Known names: {nodes}
+            Sentences:
+            {item}
+            Output:
             """
         case .sentence:
             return """

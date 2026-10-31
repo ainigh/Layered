@@ -34,8 +34,9 @@ final class MapSession {
     var clarifyContextOnly = false
     var dedupeProposals: [DedupeProposal] = []
     var sentenceWalk: SentenceWalk?
-    /// One sentence at a time (on unless turned off): each sentence goes to the model alone,
-    /// with the whole map and the notation guide, and the model writes what to append.
+    /// Step by step (on unless turned off): Submit reads items a passage at a time, the
+    /// model rewriting each in plain sentences and then writing their facts. Off: each item
+    /// goes in one Extract request.
     var sentenceMode = true
     /// Every request this session sent the model and what came back, oldest first (the Model log).
     var modelLog: [ModelExchange] = []
@@ -54,6 +55,9 @@ final class MapSession {
     @ObservationIgnored private var runningReads: Set<Int> = []
     /// The running request was stopped because a text it reads was deleted.
     @ObservationIgnored private var stoppedForDeletion = false
+    /// The plain sentences the last finished reading ended with: a live map's next piece
+    /// reads on from them, so “she” in it is still who she was.
+    @ObservationIgnored private var lastRead: (text: Int, before: [String])?
     /// How loud the microphone is now, 0 to 1 (read on a timer, not observed).
     var recordingLevel: Float { recorder?.level ?? 0 }
     /// Recordings this session added, by text id (a demo keeps them where they were dropped).
@@ -79,7 +83,6 @@ final class MapSession {
     /// The recorded answers a demo map gives until the user picks a real model.
     let recorded: any ModelClient
     let transcriber: any Transcriber
-    let diarizer: any Diarizer
     private var bookmark: Data?
 
     var coverage: Coverage { Coverage.compute(state) }
@@ -119,7 +122,7 @@ final class MapSession {
             all.append(Work(id: "audio", symbol: "waveform", text: "Transcribing \(job.file.lastPathComponent)", fraction: job.fraction))
         }
         if let walk = sentenceWalk, !walk.paused {
-            all.append(Work(id: "walk", symbol: "list.number", text: "\(walk.again ? "Checking sentence" : "Sentence") \(walk.index + 1) of \(walk.sentences.count)", fraction: walk.progress))
+            all.append(Work(id: "walk", symbol: "list.number", text: walk.label, fraction: walk.progress))
         }
         if let running {
             all.append(Work(id: "model", symbol: "cpu", text: running.rawValue.capitalized, since: runningSince))
@@ -197,7 +200,7 @@ final class MapSession {
     static func demo(_ map: Demo.Map) -> MapSession {
         // A demo transcribes for real: dropping a recording is something the user asked for.
         MapSession(mode: .demo(map), state: Demo.state(map), storage: InMemoryStorage(), settings: Settings(), prompts: PromptSet(), ui: UIState(),
-                   recorded: Demo.client(), transcriber: WhisperTranscriber(), diarizer: WhisperDiarizer())
+                   recorded: Demo.client(), transcriber: WhisperTranscriber())
     }
 
     static func open(folder: URL) throws -> MapSession {
@@ -206,7 +209,7 @@ final class MapSession {
         var settings = loaded.settings
         if settings.model.model == nil { settings.model.model = UserDefaults.standard.string(forKey: "lastModel") }
         let session = MapSession(mode: .folder(folder), state: loaded.state, storage: storage, settings: settings, prompts: loaded.prompts, ui: loaded.ui,
-                                 recorded: Demo.client(), transcriber: WhisperTranscriber(), diarizer: WhisperDiarizer())
+                                 recorded: Demo.client(), transcriber: WhisperTranscriber())
         session.bookmark = try? folder.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
         if let data = try? storage.readIconManifest() { session.icons = manifest(data); session.relayout() }
         RecentMaps.add(folder)
@@ -214,7 +217,7 @@ final class MapSession {
     }
 
     private init(mode: Mode, state: MapState, storage: any MapStorage, settings: Settings, prompts: PromptSet, ui: UIState,
-                 recorded: any ModelClient, transcriber: any Transcriber, diarizer: any Diarizer) {
+                 recorded: any ModelClient, transcriber: any Transcriber) {
         self.mode = mode
         self.state = state
         self.storage = storage
@@ -223,7 +226,6 @@ final class MapSession {
         self.ui = ui
         self.recorded = recorded
         self.transcriber = transcriber
-        self.diarizer = diarizer
         if settings.model.model == nil, case .demo = mode { self.settings.model.model = Self.demoModel }
         composerDraft = UserDefaults.standard.string(forKey: "draft:\(title)") ?? ""
         relayout()
@@ -319,14 +321,14 @@ final class MapSession {
 
     var pendingItems: [ContextItem] { state.context.pendingItems }
 
-    /// Extracts every selected item that is new or edited since it went on the map; with
-    /// `only`, just that item. One sentence at a time walks their sentences in turn, except
-    /// text from audio: a transcript goes to the model whole, in one request, so what it
-    /// says is on the map as soon as the model answers once.
+    /// Puts every selected item that is new or edited since it went on the map on it; with
+    /// `only`, just that item. Step by step (the default) reads their sentences a passage
+    /// at a time: the model rewrites the passage in plain sentences, then writes their
+    /// facts, and the harness puts them on the map before the next passage. Otherwise each
+    /// item goes in one Extract request.
     func submit(only: Int? = nil) {
         let items = pendingItems.filter { only == nil || $0.id == only }
         guard !items.isEmpty, running == nil, sentenceWalk == nil, !submitting else { return }
-        let audio = Set(items.filter { $0.kind == .transcript }.compactMap(\.textID))
         let requests: [(textID: Int, text: String)] = items.compactMap { item in
             guard let id = item.textID else { return nil }
             let request = Submit.request(for: item)
@@ -335,8 +337,8 @@ final class MapSession {
             return (id, request)
         }
         guard !requests.isEmpty else { return }
-        let whole = sentenceMode ? requests.filter { audio.contains($0.textID) } : requests
-        let walked = sentenceMode ? requests.filter { !audio.contains($0.textID) } : []
+        let whole = sentenceMode ? [] : requests
+        let walked = sentenceMode ? requests : []
         submitting = true
         Task {
             let finished = await extract(whole)
@@ -349,6 +351,7 @@ final class MapSession {
                 let changed = all.filter { r.text.contains($0.sentence) }
                 return changed.isEmpty ? all : changed
             })
+            walk.reads = true
             walk.skipDeleted(state.context)
             guard !walk.isFinished else { return }
             sentenceWalk = walk
@@ -369,8 +372,8 @@ final class MapSession {
         return true
     }
 
-    /// One sentence at a time: each sentence alone, with the whole map, as the map stands
-    /// after the one before (no context: the rest of the text stays out of the prompt).
+    /// The walk Submit (reading in passages) and Check again (one sentence at a time, with
+    /// the whole map) go through, each step against the map as the one before left it.
     func walkSentences() async {
         while var walk = sentenceWalk, !walk.paused {
             // Text deleted since the walk began is never sent.
@@ -378,6 +381,10 @@ final class MapSession {
             guard let sentence = walk.current else {
                 finishWalk(walk)
                 return
+            }
+            if walk.reads {
+                guard await readPassage(&walk) else { return }
+                continue
             }
             let about = "\(walk.again ? "again " : "")text \(sentence.text) s\(sentence.s)"
             let answered = await run(.sentence, item: ContextRenderer.single(sentence), textID: sentence.text, sentence: sentence.s, about: about)
@@ -404,8 +411,49 @@ final class MapSession {
         }
     }
 
+    /// One passage: `read` rewrites it in plain sentences (pronouns replaced, using what
+    /// was read before it), `facts` writes their facts, and the harness puts them on the map.
+    /// False when the walk stops here (paused, stopped, or a request failed).
+    private func readPassage(_ walk: inout SentenceWalk) async -> Bool {
+        let passage = walk.passage
+        guard let first = passage.first, let last = passage.last else { return false }
+        let text = first.text
+        let about = "text \(text) s\(first.s)" + (last.s == first.s ? "" : "–\(last.s)")
+        var done = false
+        if let read = await run(.read, item: Reading.passage(passage), textID: text, before: walk.context(for: text).joined(separator: "\n"), about: about) {
+            let readings = Reading.parse(read.rawOutput, passage: passage.map(\.s))
+            if readings.isEmpty {
+                done = true
+            } else if let facts = await run(.facts, item: Reading.render(readings), textID: text, readings: Reading.bySentence(readings), about: about) {
+                walk.added += facts.gate.lines.count
+                done = true
+            }
+            // What this passage said is the next one's “before”.
+            if done { walk.remember(readings.map(\.text), of: text) }
+        }
+        // Paused or stopped while the model was working: keep that.
+        guard let latest = sentenceWalk else { return false }
+        walk.paused = latest.paused
+        // Not done and its text still there: a request failed or was stopped; Resume sends
+        // the passage again. Its text deleted meanwhile: go on with the next one.
+        if !done, state.context.isCurrent(text: text) || walk.paused {
+            sentenceWalk?.paused = true
+            return false
+        }
+        for _ in passage {
+            if let finished = walk.advance(), state.context.isCurrent(text: finished) { dispatch(.markExtracted(textID: finished)) }
+        }
+        if walk.isFinished {
+            finishWalk(walk)
+            return false
+        }
+        sentenceWalk = walk
+        return !walk.paused
+    }
+
     private func finishWalk(_ walk: SentenceWalk) {
         sentenceWalk = nil
+        if walk.reads, let text = walk.beforeText { lastRead = (text, walk.before) }
         if walk.again {
             notice = Notice(text: walk.added == 0 ? "Check again: every sentence went to the model once more, and the map already says them all."
                             : "Check again: every sentence went to the model once more; it wrote \(walk.added) line\(walk.added == 1 ? "" : "s"), on the map for review.")
@@ -426,7 +474,7 @@ final class MapSession {
         Task { await walkSentences() }
     }
 
-    /// Adds a recording: transcribes it on this Mac, finds its speakers, keeps the file in
+    /// Adds a recording: transcribes it on this Mac (no speakers are identified), keeps the file in
     /// the folder, and adds the transcript as a context item. Each step shows in `audioJob`.
     /// `replacing`: the texts of a live map's pieces, which the whole recording, transcribed
     /// in one go, takes the place of in the context.
@@ -448,12 +496,11 @@ final class MapSession {
     private func transcribeAudio(_ url: URL, replacing pieces: [Int]) async {
         audioJob = AudioJob(file: url, step: .starting, replacing: pieces)
         do {
-            var transcript = try await transcriber.transcribe(url, model: settings.whisperModel) { [weak self] step in
+            let transcript = try await transcriber.transcribe(url, model: settings.whisperModel) { [weak self] step in
                 Task { @MainActor in self?.audioJob?.advance(step) }
             }
             guard !transcript.segments.isEmpty else { throw AudioJob.Problem("No speech was found in \(url.lastPathComponent).") }
-            audioJob?.step = .speakers
-            transcript = (try? await diarizer.diarize(transcript, audio: url)) ?? transcript
+            // No speaker identification: the transcript is what was said, as whisper heard it.
             audioJob?.step = .adding
             // The id the transcript gets is the one the recording is kept under.
             let id = state.evidence.nextTextID
@@ -655,9 +702,22 @@ final class MapSession {
         guard !request.isEmpty else { return }
         recording?.status = "Putting it on the map…"
         liveExtracting = true
-        let done = await run(.extract, item: request, textID: id, about: "text \(id)") != nil
-        liveExtracting = false
-        if done { dispatch(.markExtracted(textID: id)) }
+        defer { liveExtracting = false }
+        // Step by step, unless a paused walk is waiting for Resume: the piece is read like
+        // any item, going on from what the piece before it said.
+        if sentenceMode, sentenceWalk == nil {
+            let all = state.evidence.sentences(text: id)
+            let changed = all.filter { request.contains($0.sentence) }
+            var walk = SentenceWalk(sentences: changed.isEmpty ? all : changed)
+            guard !walk.isFinished else { return }
+            walk.reads = true
+            if let last = lastRead, recording?.texts.dropLast().last == last.text { walk.before = last.before }
+            walk.beforeText = id
+            sentenceWalk = walk
+            await walkSentences()
+            return
+        }
+        if await run(.extract, item: request, textID: id, about: "text \(id)") != nil { dispatch(.markExtracted(textID: id)) }
     }
 
     /// The live recording is over: its file, already in the project's audio folder, is kept
@@ -733,7 +793,8 @@ final class MapSession {
     }
 
     @discardableResult
-    func run(_ kind: PromptKind, item: String, textID: Int? = nil, sentence: Int? = nil, about: String, contextOnly: Bool = false, texts: [Int]? = nil) async -> ModelRun? {
+    func run(_ kind: PromptKind, item: String, textID: Int? = nil, sentence: Int? = nil, about: String, contextOnly: Bool = false, texts: [Int]? = nil,
+             before: String = "", readings: [Int: String] = [:]) async -> ModelRun? {
         // A text deleted meanwhile is not sent.
         if let textID, !state.context.isCurrent(text: textID) { return nil }
         let texts = texts?.filter { state.context.isCurrent(text: $0) }
@@ -743,10 +804,13 @@ final class MapSession {
         runningSince = Date()
         lastError = nil
         stoppedForDeletion = false
-        runningReads = Set(textID.map { [$0] } ?? []).union(kind == .sentence ? [] : (texts ?? state.modelTexts ?? []))
+        // A sentence, or a passage being read, is all the model reads of the context.
+        let readsContext = kind != .sentence && kind != .read && kind != .facts
+        runningReads = Set(textID.map { [$0] } ?? []).union(readsContext ? (texts ?? state.modelTexts ?? []) : [])
         let logged = logging(kind, about: about)
         let task = Task { [runner, state] in
-            try await runner.run(kind, state: state, item: item, textID: textID, sentence: sentence, aliases: state.aliases, contextOnly: contextOnly, texts: texts, onEvent: logged.onEvent)
+            try await runner.run(kind, state: state, item: item, textID: textID, sentence: sentence, aliases: state.aliases, contextOnly: contextOnly, texts: texts,
+                                 before: before, readings: readings, onEvent: logged.onEvent)
         }
         cancelRun = { task.cancel() }
         defer { running = nil; runningSince = nil; cancelRun = nil; runningReads = [] }
@@ -756,8 +820,11 @@ final class MapSession {
             if stoppedForDeletion { throw CancellationError() }
             finishLog(logged.run, with: .success(run))
             switch kind {
-            case .extract, .expand, .sentence:
+            case .extract, .expand, .sentence, .facts:
                 dispatch(.applyRun(run, about: about))
+            case .read:
+                // Plain sentences for `facts`; nothing goes on the map yet.
+                break
             case .chat:
                 // The map takes the lines; prose becomes a model item, opened over the map.
                 let reply = ChatReply.parse(run.rawOutput)
@@ -784,13 +851,13 @@ final class MapSession {
                 stoppedForDeletion = false
                 guard textID.map({ state.context.isCurrent(text: $0) }) ?? true else { return nil }
                 running = nil
-                return await run(kind, item: item, textID: textID, sentence: sentence, about: about, contextOnly: contextOnly, texts: texts)
+                return await run(kind, item: item, textID: textID, sentence: sentence, about: about, contextOnly: contextOnly, texts: texts, before: before, readings: readings)
             }
             if !(error is CancellationError) {
                 let raw = (error as? ModelError).map { "\($0)" } ?? error.localizedDescription
                 // A sentence walk resumes from its own status (Resume); retrying it here would run the sentence twice.
                 var retry: (() -> Void)?
-                if kind != .sentence {
+                if readsContext {
                     retry = { [weak self] in Task { await self?.run(kind, item: item, textID: textID, about: about, contextOnly: contextOnly, texts: texts) } }
                 }
                 lastError = (raw, "Model request failed", retry)
@@ -934,6 +1001,7 @@ final class MapSession {
         let required: [String] = switch kind {
         case .dedupe: []
         case .sentence: ["{item}", "{map}"]
+        case .facts: ["{item}"]
         default: ["{item}", "{context}"]
         }
         if let missing = required.first(where: { !text.contains($0) }) { return "the prompt no longer contains \(missing); the model would not see the input" }
@@ -1016,7 +1084,6 @@ struct AudioJob: Equatable {
         case downloading(String, Double?)
         case decoding
         case transcribing(Double)
-        case speakers
         case adding
         case done(item: Int)
         case failed(String)
@@ -1027,9 +1094,8 @@ struct AudioJob: Equatable {
             case .starting, .downloading: return 0
             case .decoding: return 1
             case .transcribing: return 2
-            case .speakers: return 3
-            case .adding: return 4
-            case .done: return 5
+            case .adding: return 3
+            case .done: return 4
             case .failed: return -1
             }
         }
@@ -1053,7 +1119,7 @@ struct AudioJob: Equatable {
         switch step {
         case .downloading(_, let f): return f.map { $0 * 0.3 }
         case .transcribing(let f): return 0.35 + f * 0.6
-        case .speakers, .adding: return 0.97
+        case .adding: return 0.97
         default: return nil
         }
     }

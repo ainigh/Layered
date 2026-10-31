@@ -59,30 +59,47 @@ public struct ModelRunner: Sendable {
     /// The prompt text for a kind, without running it (shown in the Prompt panel, used by tests).
     /// The context is the selected items unless `texts` names others; one sentence at a time
     /// sends none, only the map and the sentence.
-    public func prompt(_ kind: PromptKind, state: MapState, item: String, contextOnly: Bool = false, texts: [Int]? = nil) -> String {
-        prompts.render(kind,
-                       map: contextOnly ? "" : state.canonical,
-                       context: kind == .sentence ? "" : ContextRenderer.numbered(state.evidence, texts: texts ?? state.modelTexts, replies: state.context.replyTexts),
-                       nodes: state.graph.rootNames,
-                       item: item)
+    /// Reading a passage sends no map and no context: `read` gets `before` (the plain
+    /// sentences read just before the passage) as its context, `facts` only the sentences.
+    public func prompt(_ kind: PromptKind, state: MapState, item: String, contextOnly: Bool = false, texts: [Int]? = nil, before: String = "") -> String {
+        let reading = kind == .read || kind == .facts
+        let context: String = switch kind {
+        case .sentence, .facts: ""
+        case .read: before
+        default: ContextRenderer.numbered(state.evidence, texts: texts ?? state.modelTexts, replies: state.context.replyTexts)
+        }
+        return prompts.render(kind,
+                              map: contextOnly || reading ? "" : state.canonical,
+                              context: context,
+                              nodes: state.graph.rootNames,
+                              item: item)
     }
 
     /// `sentence`: one sentence at a time, the number of the sentence of `textID` sent as the item.
+    /// `before` and `readings`: reading a passage (`read`'s context, and how it read each
+    /// sentence, for `facts`' proof).
     public func run(_ kind: PromptKind, state: MapState, item: String, textID: Int? = nil, sentence: Int? = nil, aliases: [String: [String]] = [:],
-                    contextOnly: Bool = false, texts: [Int]? = nil,
+                    contextOnly: Bool = false, texts: [Int]? = nil, before: String = "", readings: [Int: String] = [:],
                     onEvent: @Sendable (RunEvent) -> Void = { _ in }) async throws -> ModelRun {
         guard let model = settings.model else { throw ModelError.noModel }
-        let usesNotation = kind != .clarify && kind != .chat
-        let grammar = usesNotation && settings.useGrammar
+        let usesNotation = kind != .clarify && kind != .chat && kind != .read
+        // Facts are plain `a | relation | b` lines the harness turns into notation: no grammar,
+        // nothing to repair.
+        let writesNotation = usesNotation && kind != .facts
+        let grammar = writesNotation && settings.useGrammar
             ? Grammar.build(nodes: state.graph.rootNames, allowEdits: kind == .dedupe || kind == .extract || kind == .sentence,
                             allowDeletes: kind == .sentence, allowComments: kind == .dedupe, allowEmpty: kind == .sentence)
             : nil
-        var request = ModelRequest(model: model, prompt: prompt(kind, state: state, item: item, contextOnly: contextOnly, texts: texts),
+        var request = ModelRequest(model: model, prompt: prompt(kind, state: state, item: item, contextOnly: contextOnly, texts: texts, before: before),
                                    grammar: grammar, temperature: settings.temperature, contextSize: settings.contextSize)
 
         let options = appendAll ? GateOptions.appendAll(prompt: kind, textID: textID, sentence: sentence, aliases: aliases)
                                 : GateOptions(prompt: kind, textID: textID, sentence: sentence, aliases: aliases)
-        var session = GateSession(gate: Gate(options: options), graph: state.graph, evidence: state.proofEvidence)
+        var gateOptions = options
+        gateOptions.readings = readings
+        var session = GateSession(gate: Gate(options: gateOptions), graph: state.graph, evidence: state.proofEvidence)
+        // The sentence a fact without a number of its own belongs to: the one before it.
+        var factSentence = readings.keys.min() ?? sentence ?? 1
         var raw = ""
         var promptTokens: Int?
         var responseTokens: Int?
@@ -108,6 +125,21 @@ public struct ModelRunner: Sendable {
         }
 
         func feed(_ line: String) {
+            guard kind == .facts else { return gate(line) }
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            guard let fact = Facts.parse(line, s: factSentence) else {
+                // Not a fact: held back as one, so it shows why.
+                let count = session.result.events.count
+                session.feed(line)
+                for event in session.result.events[count...] { onEvent(.heldBack(event)) }
+                return
+            }
+            factSentence = fact.s
+            session.gate.options.sentence = fact.s
+            for notation in Facts.notation(fact) { gate(notation) }
+        }
+
+        func gate(_ line: String) {
             let before = session.result.events.count
             let kept = session.feed(line)
             if !kept.isEmpty { onEvent(.kept(kept)) }
@@ -126,7 +158,7 @@ public struct ModelRunner: Sendable {
         // Retry once: send each failing line back with its error, then give up on it.
         var retried = false
         let failures = session.result.parseErrors
-        if usesNotation, !failures.isEmpty {
+        if writesNotation, !failures.isEmpty {
             retried = true
             let repair = failures.map { "\($0.error)\n\($0.line)" }.joined(separator: "\n")
             let repairPrompt = request.prompt + "\n\nThese lines did not parse. Rewrite each one correctly, one per line, nothing else:\n" + repair + "\noutput:\n"

@@ -438,7 +438,6 @@ struct AudioOverlay: View {
             (downloadTitle(job), "arrow.down.circle"),
             ("Read the audio", "waveform"),
             ("Transcribe", "text.bubble"),
-            ("Find who is speaking", "person.2"),
             ("Add it to the context", "doc.text"),
         ]
         let current = job.failedAt ?? job.step.rank

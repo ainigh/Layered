@@ -4,7 +4,8 @@ import Harness
 import whisper
 
 /// Transcribes on the machine with whisper.cpp (Metal). The model is downloaded on first
-/// use to the app's support folder. Output is segments with start and end times.
+/// use to the app's support folder. Output is segments with start and end times; no
+/// speakers are identified.
 struct WhisperTranscriber: Transcriber {
     static let supportDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Mindmap/whisper")
@@ -20,34 +21,6 @@ struct WhisperTranscriber: Transcriber {
         return try await Task.detached(priority: .userInitiated) {
             try WhisperRun.run(modelURL: modelURL, samples: samples, tinydiarize: false, progress: { progress(.transcribing($0)) })
         }.value
-    }
-}
-
-/// Speaker labels. Tries whisper.cpp's tinydiarize model (two-speaker turn detection);
-/// a Core ML pyannote pipeline can replace this behind the same protocol.
-struct WhisperDiarizer: Diarizer {
-    func diarize(_ transcript: Transcript, audio: URL) async throws -> Transcript {
-        guard let modelURL = try? await WhisperModels.ensure("small.en-tdrz", progress: { _ in }) else {
-            var t = transcript
-            for i in t.segments.indices { t.segments[i].speaker = "Speaker 1" }
-            return t
-        }
-        let samples = try AudioDecoder.pcm16k(audio)
-        let turns = try await Task.detached(priority: .userInitiated) {
-            try WhisperRun.run(modelURL: modelURL, samples: samples, tinydiarize: true, progress: { _ in })
-        }.value
-        // Map each original segment to the speaker of the tinydiarize segment that overlaps it most.
-        var t = transcript
-        for i in t.segments.indices {
-            let seg = t.segments[i]
-            let best = turns.segments.max { overlap($0, seg) < overlap($1, seg) }
-            t.segments[i].speaker = best?.speaker ?? "Speaker 1"
-        }
-        return t
-    }
-
-    private func overlap(_ a: Transcript.Segment, _ b: Transcript.Segment) -> Double {
-        max(0, min(a.t1, b.t1) - max(a.t0, b.t0))
     }
 }
 

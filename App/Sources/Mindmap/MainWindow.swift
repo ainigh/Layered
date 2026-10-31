@@ -650,7 +650,8 @@ struct RunStatus: View {
     }
 }
 
-/// One sentence at a time: how far along, the sentence under consideration, pause.
+/// Reading in passages (or Check again's sentences): how far along, what is under
+/// consideration, pause.
 struct WalkStatus: View {
     @Bindable var session: MapSession
     let walk: SentenceWalk
@@ -658,8 +659,8 @@ struct WalkStatus: View {
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
             ProgressView(value: walk.progress).frame(width: 64).controlSize(.mini)
-            Text("\(walk.again ? "Checking sentence" : "Sentence") \(walk.index + 1) of \(walk.sentences.count)").monospacedDigit()
-                .help(walk.current?.sentence ?? "")
+            Text(walk.label).monospacedDigit()
+                .help(walk.passage.map(\.sentence).joined(separator: " "))
             Button(walk.paused ? "Resume" : "Pause") {
                 session.sentenceWalk?.paused.toggle()
                 if session.sentenceWalk?.paused == false { Task { await session.walkSentences() } }

@@ -299,6 +299,16 @@ public struct SentenceWalk: Equatable, Sendable {
     public var again = false
     /// Lines the walk has put on the map so far.
     public var added = 0
+    /// Reading in passages (Submit): a few sentences of one text at a time, read into
+    /// plain sentences, then facts. Off (Check again): one sentence at a time.
+    public var reads = false
+    /// The plain sentences last read from `beforeText`: who “she” is in the next passage.
+    public var before: [String] = []
+    public var beforeText: Int?
+
+    /// Sentences per passage, and how many plain sentences go before the next one.
+    public static let passageSize = 4
+    public static let beforeSize = 6
 
     public init(textID: Int, sentences: [Sentence]) {
         self.textID = textID
@@ -321,6 +331,34 @@ public struct SentenceWalk: Equatable, Sendable {
     }
 
     public var current: Sentence? { index < sentences.count ? sentences[index] : nil }
+
+    /// What goes to the model next: the current sentence, and when reading, the ones after
+    /// it from the same text, up to a passage.
+    public var passage: [Sentence] {
+        guard let first = current else { return [] }
+        let size = reads ? Self.passageSize : 1
+        return Array(sentences[index...].prefix { $0.text == first.text }.prefix(size))
+    }
+
+    /// The plain sentences read from a passage of `text`, kept for the next one (a new text
+    /// starts with none).
+    public mutating func remember(_ readings: [String], of text: Int) {
+        if beforeText != text { before = [] }
+        beforeText = text
+        before = Array((before + readings).suffix(Self.beforeSize))
+    }
+
+    /// What the status bar says: the passage being read, or the sentence being checked.
+    public var label: String {
+        let total = sentences.count
+        if again { return "Checking sentence \(min(index + 1, total)) of \(total)" }
+        let n = passage.count
+        guard reads else { return "Sentence \(min(index + 1, total)) of \(total)" }
+        return n > 1 ? "Reading sentences \(index + 1)–\(index + n) of \(total)" : "Reading sentence \(min(index + 1, total)) of \(total)"
+    }
+
+    /// The context `read` gets before a passage of `text`.
+    public func context(for text: Int) -> [String] { beforeText == text ? before : [] }
     public var isFinished: Bool { index >= sentences.count }
     public var progress: Double { sentences.isEmpty ? 1 : Double(index) / Double(sentences.count) }
 

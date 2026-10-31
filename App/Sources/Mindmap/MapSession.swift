@@ -420,16 +420,16 @@ final class MapSession {
         let text = first.text
         let about = "text \(text) s\(first.s)" + (last.s == first.s ? "" : "–\(last.s)")
         var done = false
-        if let read = await run(.read, item: Reading.passage(passage), textID: text, before: walk.context(for: text).joined(separator: "\n"), about: about) {
+        if let read = await run(.read, item: Reading.passage(passage), textID: text, about: about, before: walk.context(for: text).joined(separator: "\n")) {
             let readings = Reading.parse(read.rawOutput, passage: passage.map(\.s))
             if readings.isEmpty {
                 done = true
-            } else if let facts = await run(.facts, item: Reading.render(readings), textID: text, readings: Reading.bySentence(readings), about: about) {
+            } else if let facts = await run(.facts, item: Reading.render(readings), textID: text, about: about, readings: Reading.bySentence(readings)) {
                 walk.added += facts.gate.lines.count
                 done = true
             }
             // What this passage said is the next one's “before”.
-            if done { walk.remember(readings.map(\.text), of: text) }
+            if done { walk.remember(readings.map { $0.text }, of: text) }
         }
         // Paused or stopped while the model was working: keep that.
         guard let latest = sentenceWalk else { return false }

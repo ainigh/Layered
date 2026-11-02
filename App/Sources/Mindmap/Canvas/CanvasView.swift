@@ -41,6 +41,10 @@ struct CanvasView: View {
     @State private var linkDrag: (from: String, to: CGPoint)?
     @State private var boxSelect: (start: CGPoint, end: CGPoint)?
     @State private var hovered: String?
+    /// The link under the pointer (when no node is), drawn heavier.
+    @State private var hoveredEdge: EdgeKey?
+    /// The card of the map's keys (?).
+    @State private var showKeys = false
     @State private var labelPrompt: (from: String, to: String)?
     @State private var labelText = ""
     @State private var renameTarget: String?
@@ -99,9 +103,11 @@ struct CanvasView: View {
                 .contextMenu { contextMenu(graph: graph) }
                 .onContinuousHover { phase in
                     guard draggingNode == nil, panStart == nil else { return }
-                    guard case .active(let p) = phase else { hovered = nil; return }
+                    guard case .active(let p) = phase else { hovered = nil; hoveredEdge = nil; return }
                     // On the hovered node's fold button, the node stays hovered so the button stays.
                     if let name = hit(p, layout) { hovered = name } else if let b = hitButton(p, layout), b.kind == .fold, b.node == hovered {} else { hovered = nil }
+                    let edge = hovered == nil ? hitEdge(p, layout) : nil
+                    if edge != hoveredEdge { hoveredEdge = edge }
                 }
                 .focusable()
                 .focusEffectDisabled()
@@ -109,7 +115,7 @@ struct CanvasView: View {
 
                 if let hovered, draggingNode == nil, linkDrag == nil, let p = layout[hovered], let node = graph.nodes[NodeID(name: hovered)] {
                     let top = view.screen(MapLayout.Point(x: p.x + p.w / 2, y: p.y))
-                    HoverCard(node: node, graph: graph, pinned: p.pinned)
+                    HoverCard(node: node, graph: graph, pinned: p.pinned, hidden: p.hiddenCount)
                         .fixedSize()
                         .frame(width: 0, height: 0, alignment: .bottom)
                         .position(x: top.x, y: top.y - Theme.Space.s)
@@ -123,6 +129,11 @@ struct CanvasView: View {
                         .allowsHitTesting(false)
                 }
                 if layout.nodes.isEmpty { EmptyMap() }
+                if showKeys {
+                    MapKeysCard { withAnimation(Theme.slide) { showKeys = false } }
+                        .shieldsMapScroll()
+                        .transition(.scale(scale: 0.96).combined(with: .opacity))
+                }
                 // Bottom centre, above the capture bar: the top of the map holds the action bar.
                 VStack(spacing: Theme.Space.s) {
                     Spacer()
@@ -165,6 +176,7 @@ struct CanvasView: View {
             .clipped()
             .animation(Theme.selection, value: hovered)
             .animation(Theme.slide, value: finding)
+            .animation(Theme.slide, value: showKeys)
             .onScrollWheel(shields: shields) { delta, location, zooms in
                 if zooms {
                     zoom(by: exp(delta.height * 0.01), at: location, animate: false)
@@ -436,6 +448,7 @@ struct CanvasView: View {
         case "0": refit(); return true
         case "f", "F": fillView(); return true
         case "m", "M": withAnimation(Theme.slide) { minimapOn.toggle() }; return true
+        case "?": withAnimation(Theme.slide) { showKeys.toggle() }; return true
         case "z", "Z":
             guard !session.selection.isEmpty else { return false }
             focusSelection(); return true
@@ -447,6 +460,7 @@ struct CanvasView: View {
         }
         switch press.key {
         case .escape:
+            if showKeys { withAnimation(Theme.slide) { showKeys = false }; return true }
             if finding { closeFind(); return true }
             guard !session.selection.isEmpty || session.selectedEdge != nil else { return false }
             withAnimation(Theme.selection) { session.selection = []; session.selectedEdge = nil }
@@ -509,6 +523,7 @@ struct CanvasView: View {
         if let hovered, draggingNode == nil {
             for e in layout.edges where e.key.lo.name == hovered || e.key.hi.name == hovered { litEdges.insert(e.key) }
         }
+        if let hoveredEdge, draggingNode == nil { litEdges.insert(hoveredEdge) }
 
         var world = ctx
         world.translateBy(x: v.x, y: v.y)
@@ -1112,6 +1127,7 @@ struct CanvasView: View {
             Button("Fit map") { refit() }
             Button("Fill the view") { fillView() }
             Button("Find on the map…") { openFind() }
+            Button("Keys on the map") { showKeys = true }
             if !session.ui.collapsed.isEmpty { Button("Open every branch") { session.unfoldAll() } }
             Button(minimapOn ? "Hide the overview" : "Show the overview") { minimapOn.toggle() }
             if session.layout.nodes.contains(where: \.pinned) {
@@ -1439,6 +1455,60 @@ extension View {
     }
 }
 
+/// Every key the map answers to, in a card over it (? opens and closes it).
+struct MapKeysCard: View {
+    let close: () -> Void
+
+    struct Key: Hashable { let key: String; let what: String }
+    struct Group: Hashable { let title: String; let keys: [Key] }
+
+    static let groups: [Group] = [
+        Group(title: "Moving", keys: [Key(key: "drag, scroll", what: "move the map"), Key(key: "pinch, ⌘-scroll", what: "zoom about the pointer"),
+                                      Key(key: "+  −", what: "zoom in, out"), Key(key: "0", what: "fit the map"), Key(key: "F", what: "fill the view"),
+                                      Key(key: "M", what: "overview on or off"), Key(key: "⇧ arrows", what: "move the map")]),
+        Group(title: "A selected node", keys: [Key(key: "← →", what: "its parent, its child"), Key(key: "↑ ↓", what: "the node above, below"),
+                                               Key(key: "↩", what: "rename"), Key(key: "space", what: "details"), Key(key: "/", what: "fold or open its branch"),
+                                               Key(key: "Z", what: "zoom to the selection"), Key(key: "⌫", what: "delete (⌘Z brings it back)"), Key(key: "esc", what: "let go")]),
+        Group(title: "On the map", keys: [Key(key: "⌘F", what: "find on the map"), Key(key: "double-click", what: "expand a node"),
+                                          Key(key: "⌥-drag", what: "link two nodes"), Key(key: "⇧-drag", what: "select with a box"),
+                                          Key(key: "drag a node", what: "pin it there"), Key(key: "?", what: "this card")]),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            HStack {
+                Text("Keys on the map").font(Theme.title)
+                Spacer()
+                Button(action: close) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .buttonStyle(.plain)
+                    .help("Close (esc)")
+                    .accessibilityLabel("Close")
+            }
+            HStack(alignment: .top, spacing: Theme.Space.l) {
+                ForEach(Self.groups, id: \.self) { group in
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        Text(group.title).font(Theme.label).foregroundStyle(.secondary)
+                        ForEach(group.keys, id: \.self) { item in
+                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                                Text(item.key)
+                                    .font(Theme.caption.monospaced().weight(.semibold))
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 4))
+                                    .frame(minWidth: 96, alignment: .leading)
+                                Text(item.what).font(Theme.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(Theme.Space.l)
+        .frame(maxWidth: 820)
+        .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))
+        .padding(Theme.Space.l)
+    }
+}
+
 /// What an empty map says.
 struct EmptyMap: View {
     var body: some View {
@@ -1446,6 +1516,7 @@ struct EmptyMap: View {
             Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 34, weight: .light)).foregroundStyle(.tertiary)
             Text("No map yet").font(Theme.title)
             Text("Add text or audio below, then send it from Context,\nor drop a text or audio file here.").font(Theme.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text("Press ? for the map's keys.").font(Theme.caption).foregroundStyle(.tertiary)
         }
         .padding(Theme.Space.l)
         .allowsHitTesting(false)
@@ -1457,6 +1528,8 @@ struct HoverCard: View {
     let node: Node
     let graph: Graph
     var pinned = false
+    /// How many nodes its fold hides (0: not folded).
+    var hidden = 0
 
     var body: some View {
         let kind = node.note(kind: "kind")
@@ -1467,7 +1540,9 @@ struct HoverCard: View {
                 Image(systemName: IconManifest.fallbackSymbol(kind: kind)).foregroundStyle(Theme.kind(kind)).font(Theme.caption)
                 Text(node.id.name).font(Theme.label).lineLimit(3)
             }
-            let facts = [kind, node.note(kind: "src").map { "from \($0)" }, pinned ? "pinned" : nil, "\(graph.degree(of: node.id)) links"].compactMap { $0 }
+            let degree = graph.degree(of: node.id)
+            let facts = [kind, node.note(kind: "src").map { "from \($0)" }, pinned ? "pinned" : nil, degree == 1 ? "1 link" : "\(degree) links",
+                         hidden > 0 ? "\(hidden) folded away" : nil].compactMap { $0 }
             Text(facts.joined(separator: " · ")).font(Theme.caption).foregroundStyle(.secondary)
             if !notes.isEmpty || !comments.isEmpty {
                 Divider()

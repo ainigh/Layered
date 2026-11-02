@@ -15,6 +15,16 @@ public struct ModelSettings: Equatable, Sendable, Codable {
         self.contextSize = contextSize
         self.useGrammar = useGrammar
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        host = c.value(.host, or: host)
+        model = c.value(.model, or: model)
+        temperature = c.value(.temperature, or: temperature)
+        contextSize = c.value(.contextSize, or: contextSize)
+        useGrammar = c.value(.useGrammar, or: useGrammar)
+    }
 }
 
 /// What a run produced: the request, the raw output (the audit trail), the gate's verdicts and token use.

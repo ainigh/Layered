@@ -199,4 +199,88 @@ final class MapLayoutTests: XCTestCase {
         XCTAssertEqual(card.h, 2 * M.nameLine + 2 * M.padY)
         XCTAssertTrue(Export.svg(graph, layout: map).contains(">review meeting<"))
     }
+
+    // MARK: - Folding, morphing, finding your way
+
+    func testFoldingHidesABranchAndCountsIt() throws {
+        let graph = try Compiler.compile("| hub - has | a\n| hub - has | b\n| a - has | c\n| c - has | d\n| d - knows | b\n| a - near | b")
+        let open = MapLayout.compute(graph)
+        XCTAssertEqual(open["a"]?.childCount, 1)
+        XCTAssertEqual(open["a"]?.hiddenCount, 0)
+        XCTAssertEqual(open.children["hub"], ["a", "b"])
+        XCTAssertEqual(open.parent["c"], "a")
+
+        let cases: [(collapsed: Set<String>, hidden: [String], counts: [String: Int])] = [
+            ([], [], [:]),
+            (["a"], ["c", "d"], ["a": 2]),
+            (["c"], ["d"], ["c": 1]),
+            // Nested folds: the outermost hides all.
+            (["a", "c"], ["c", "d"], ["a": 2]),
+            (["hub"], ["a", "b", "c", "d"], ["hub": 4]),
+            // A leaf has nothing to fold.
+            (["d"], [], [:]),
+        ]
+        for c in cases {
+            let map = MapLayout.compute(graph, collapsed: c.collapsed)
+            XCTAssertEqual(Set(map.foldedUnder.keys), Set(c.hidden), "hidden by \(c.collapsed)")
+            for h in c.hidden { XCTAssertNil(map[h], "\(h) is not drawn under \(c.collapsed)") }
+            for (name, count) in c.counts { XCTAssertEqual(map[name]?.hiddenCount, count, "\(name) under \(c.collapsed)") }
+            for e in map.edges { XCTAssertTrue(map[e.key.lo.name] != nil && map[e.key.hi.name] != nil, "no link reaches a hidden node") }
+        }
+        // Folding never recolours another branch.
+        XCTAssertEqual(MapLayout.compute(graph, collapsed: ["a"])["b"]?.branch, open["b"]?.branch)
+    }
+
+    func testMorphingSlidesNodesAndGrowsNewOnesFromTheirParent() throws {
+        let before = MapLayout.compute(try Compiler.compile("| hub - has | a"))
+        let after = MapLayout.compute(try Compiler.compile("| hub - has | a\n| hub - has | b\n| a - has | c"))
+        XCTAssertEqual(after.arrivals(since: before), ["b", "c"])
+        XCTAssertEqual(after.morphed(from: before, t: 1), after)
+
+        let start = after.morphed(from: before, t: 0)
+        XCTAssertEqual(start["a"]!.center.x, before["a"]!.center.x, accuracy: 0.001)
+        XCTAssertEqual(start["a"]!.center.y, before["a"]!.center.y, accuracy: 0.001)
+        // New nodes start where their nearest old ancestor was.
+        XCTAssertEqual(start["c"]!.center.x, before["a"]!.center.x, accuracy: 0.001)
+        XCTAssertEqual(start["b"]!.center.y, before["hub"]!.center.y, accuracy: 0.001)
+
+        let half = after.morphed(from: before, t: 0.5)
+        let mid = (before["a"]!.center.y + after["a"]!.center.y) / 2
+        XCTAssertEqual(half["a"]!.center.y, mid, accuracy: 0.001)
+        // Links follow the nodes.
+        let link = half.edges.first { $0.key == EdgeKey(NodeID(name: "a"), NodeID(name: "c")) }!
+        XCTAssertEqual(link.p0.y, half["a"]!.y + half["a"]!.anchorY, accuracy: 0.001)
+    }
+
+    func testArrowKeysWalkTheTree() throws {
+        let graph = try Compiler.compile("| hub - has | a\n| hub - has | b\n| hub - has | c\n| b - has | d")
+        let map = MapLayout.compute(graph)
+        let cases: [(from: String, direction: MapLayout.Direction, to: String?)] = [
+            ("a", .left, "hub"),
+            ("hub", .right, "b"),
+            ("b", .right, "d"),
+            ("a", .down, "b"),
+            ("b", .down, "c"),
+            ("b", .up, "a"),
+            ("a", .up, nil),
+            ("hub", .left, nil),
+            ("d", .left, "b"),
+            ("missing", .left, nil),
+        ]
+        for c in cases { XCTAssertEqual(map.neighbour(of: c.from, c.direction), c.to, "\(c.from) \(c.direction)") }
+    }
+
+    func testSearchFindsNamesAndNotesInDrawingOrder() throws {
+        let graph = try Compiler.compile("| hub - has | café paris\n| hub - has | new york @todo call Paris office\n| hub - has | rome\n| rome - has | paris hilton")
+        let map = MapLayout.compute(graph, collapsed: ["rome"])
+        let cases: [(query: String, found: [String])] = [
+            ("", []),
+            ("   ", []),
+            ("PARIS", ["café paris", "new york", "paris hilton"]),
+            ("cafe", ["café paris"]),
+            ("paris office", ["new york"]),
+            ("nothing", []),
+        ]
+        for c in cases { XCTAssertEqual(map.search(c.query, in: graph), c.found, "“\(c.query)”") }
+    }
 }

@@ -103,6 +103,10 @@ public struct MapLayout: Equatable, Sendable {
         /// How many icons it shows (stacked when more than one), at least 1.
         public let icons: Int
         public let badge: Bool
+        /// How many nodes hang straight under it in its tree (whether shown or folded away).
+        public let childCount: Int
+        /// Folded: how many nodes are hidden under it (0 when it is open).
+        public let hiddenCount: Int
         /// Kept where `@pos` puts it (or about to be: `placing` marks what it moved).
         public internal(set) var pinned: Bool
         /// A card (the model's extras) or open (icon above name).
@@ -155,6 +159,11 @@ public struct MapLayout: Equatable, Sendable {
     public private(set) var edges: [PlacedEdge] = []
     /// The box that holds every node and label, in map points.
     public private(set) var minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0
+    /// The trees as drawn: each shown node's parent, and each shown node's children in order.
+    public private(set) var parent: [String: String] = [:]
+    public private(set) var children: [String: [String]] = [:]
+    /// Each node a fold hides, and the folded node it is hidden under.
+    public private(set) var foldedUnder: [String: String] = [:]
 
     public var width: Double { maxX - minX }
     public var height: Double { maxY - minY }
@@ -196,13 +205,16 @@ public struct MapLayout: Equatable, Sendable {
     }
 
     /// `icons`: how many icons a node's name matches (the app stacks them); 1 when unknown.
+    /// `collapsed`: nodes whose branches are folded: what hangs under them in their tree is
+    /// left out (and counted on them), with every link that touches it. Branch colours are
+    /// numbered before folding, so folding a branch never recolours another.
     public static func compute(_ graph: Graph, measure: Measure = estimate, glyph: (Node) -> Bool = defaultGlyph,
-                               icons: (Node) -> Int = { _ in 1 }) -> MapLayout {
+                               icons: (Node) -> Int = { _ in 1 }, collapsed: Set<String> = []) -> MapLayout {
         typealias M = Metrics
         var layout = MapLayout()
         let ids = graph.nodes.keys.filter { $0.scope.isEmpty }
         guard !ids.isEmpty else { return layout }
-        let all = graph.edges.values
+        var all = graph.edges.values
             .filter { $0.a.scope.isEmpty && $0.b.scope.isEmpty && $0.a != $0.b && graph.nodes[$0.a] != nil && graph.nodes[$0.b] != nil }
             .sorted { $0.key < $1.key }
 
@@ -259,9 +271,26 @@ public struct MapLayout: Equatable, Sendable {
         }
         for r in sortedRoots { paint(r, 0) }
 
+        // Folds: everything under a collapsed node (the outermost, when folds nest) is hidden.
+        let childCount = children.mapValues(\.count)
+        var hidden: [NodeID: NodeID] = [:]
+        var hiddenCount: [NodeID: Int] = [:]
+        if !collapsed.isEmpty {
+            func hide(_ id: NodeID, under top: NodeID) {
+                for c in children[id] ?? [] { hidden[c] = top; hiddenCount[top, default: 0] += 1; hide(c, under: top) }
+            }
+            func fold(_ id: NodeID) {
+                if collapsed.contains(id.name), !(children[id] ?? []).isEmpty { hide(id, under: id) } else { (children[id] ?? []).forEach(fold) }
+            }
+            sortedRoots.forEach(fold)
+            for top in hiddenCount.keys { children[top] = [] }
+        }
+        let shown = ids.filter { hidden[$0] == nil }
+        if !hidden.isEmpty { all.removeAll { hidden[$0.a] != nil || hidden[$0.b] != nil } }
+
         // Size every node.
         var sized: [NodeID: PlacedNode] = [:]
-        for id in ids {
+        for id in shown {
             let node = graph.nodes[id]!
             let lines = nameLines(id.name, M.maxText, measure)
             let nameW = lines.map { measure($0, .name) }.max() ?? 0
@@ -287,7 +316,8 @@ public struct MapLayout: Equatable, Sendable {
             sized[id] = PlacedNode(
                 id: id, nameLines: lines, notes: notes,
                 cut: lines.joined(separator: " ") != Self.words(id.name).joined(separator: " ") || notes.count < all.count || zip(notes, all).contains { $0 != $1 },
-                depth: depth[id] ?? 0, branch: branch[id] ?? 0, glyph: hasGlyph, icons: max(1, iconCount), badge: hasBadge, pinned: pin != nil, boxed: boxed,
+                depth: depth[id] ?? 0, branch: branch[id] ?? 0, glyph: hasGlyph, icons: max(1, iconCount), badge: hasBadge,
+                childCount: childCount[id] ?? 0, hiddenCount: hiddenCount[id] ?? 0, pinned: pin != nil, boxed: boxed,
                 x: 0, y: 0, w: w, h: h)
         }
 
@@ -334,7 +364,7 @@ public struct MapLayout: Equatable, Sendable {
         }
 
         // Pins keep their place (the note holds the centre).
-        for id in ids {
+        for id in shown {
             if let pos = graph.nodes[id]!.note(kind: "pos").flatMap(Position.init(noteValue:)) {
                 sized[id]!.x = (pos.x - sized[id]!.w / 2).rounded()
                 sized[id]!.y = (pos.y - sized[id]!.h / 2).rounded()
@@ -343,6 +373,11 @@ public struct MapLayout: Equatable, Sendable {
 
         layout.nodes = drawn.map { sized[$0]! }
         layout.index = Dictionary(uniqueKeysWithValues: layout.nodes.enumerated().map { ($1.id.name, $0) })
+        for (p, kids) in children where !kids.isEmpty {
+            layout.children[p.name] = kids.map(\.name)
+            for k in kids { layout.parent[k.name] = p.name }
+        }
+        layout.foldedUnder = Dictionary(uniqueKeysWithValues: hidden.map { ($0.key.name, $0.value.name) })
         let maxLabel = M.maxColumnGap - 2 * M.padX
         layout.edges = all.map { e in
             let tree = treeEdges.contains(e.key)
@@ -414,6 +449,94 @@ public struct MapLayout: Equatable, Sendable {
     /// The centre `@pos` should record for a node moved by (dx, dy).
     public func pinnedCenter(_ name: String, dx: Double, dy: Double) -> Point? {
         self[name].map { Point(x: ($0.center.x + dx).rounded(), y: ($0.center.y + dy).rounded()) }
+    }
+
+    // MARK: - Moving between layouts
+
+    /// Partway from `old` to this layout, `t` from 0 (as `old` had it) to 1 (this layout):
+    /// each node `old` had slides from its centre there to its centre here; a node `old`
+    /// did not have grows out of where its nearest ancestor was (a branch unfolding comes out
+    /// of its folded node), or appears where it lands. Links follow the nodes.
+    public func morphed(from old: MapLayout, t: Double) -> MapLayout {
+        guard t < 1 else { return self }
+        let t = max(0, t)
+        var next = self
+        for i in next.nodes.indices {
+            let n = nodes[i]
+            var start = old[n.id.name]?.center
+            var up = parent[n.id.name]
+            while start == nil, let p = up {
+                start = old[p]?.center
+                up = parent[p]
+            }
+            guard let from = start else { continue }
+            let to = n.center
+            next.nodes[i].x = from.x + (to.x - from.x) * t - n.w / 2
+            next.nodes[i].y = from.y + (to.y - from.y) * t - n.h / 2
+        }
+        next.reroute { _ in true }
+        next.fitBounds(measure: Self.estimate)
+        return next
+    }
+
+    /// Which nodes `old` did not have: what fades in while the map moves to this layout.
+    public func arrivals(since old: MapLayout) -> Set<String> {
+        Set(nodes.lazy.map(\.id.name).filter { old.index[$0] == nil })
+    }
+
+    // MARK: - Finding your way
+
+    public enum Direction: Sendable, CaseIterable { case left, right, up, down }
+
+    /// The node to go to from `name` with an arrow key: left to its parent, right to its child
+    /// nearest level with it, up and down to the nearest node that way (its sibling, in a
+    /// column); where the tree has nothing that way, the nearest node in that direction.
+    public func neighbour(of name: String, _ direction: Direction) -> String? {
+        guard let from = self[name] else { return nil }
+        let c = from.center
+        switch direction {
+        case .left:
+            if let p = parent[name], let placed = self[p], placed.center.x < c.x { return p }
+        case .right:
+            let kids = (children[name] ?? []).compactMap { self[$0] }.filter { $0.center.x > c.x }
+            if let nearest = kids.min(by: { (abs($0.center.y - c.y), $0.y) < (abs($1.center.y - c.y), $1.y) }) { return nearest.id.name }
+        case .up, .down: break
+        }
+        // The nearest node that way, within a wide cone; across the way counts double.
+        var best: (score: Double, name: String)?
+        for n in nodes where n.id.name != name {
+            let dx = n.center.x - c.x, dy = n.center.y - c.y
+            let along: Double, across: Double
+            switch direction {
+            case .left: along = -dx; across = abs(dy)
+            case .right: along = dx; across = abs(dy)
+            case .up: along = -dy; across = abs(dx)
+            case .down: along = dy; across = abs(dx)
+            }
+            guard along > 1, across <= along * 3 else { continue }
+            let score = along + 2 * across
+            if best == nil || (score, n.id.name) < (best!.score, best!.name) { best = (score, n.id.name) }
+        }
+        return best?.name
+    }
+
+    /// The nodes of `graph` whose name, or a note shown under it, holds every word of `query`
+    /// (ignoring case and accents): the shown ones in drawing order, top to bottom, then the
+    /// folded-away ones by name. Empty for an empty query.
+    public func search(_ query: String, in graph: Graph) -> [String] {
+        let words = Self.folded(query).split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return [] }
+        func matches(_ node: Node) -> Bool {
+            let text = Self.folded(([node.id.name] + Self.shownNotes(node)).joined(separator: " "))
+            return words.allSatisfy { text.contains($0) }
+        }
+        let shown = nodes.filter { graph.nodes[$0.id].map(matches) ?? false }.map(\.id.name)
+        let hidden = foldedUnder.keys.filter { graph.nodes[NodeID(name: $0)].map(matches) ?? false }.sorted()
+        return shown + hidden
+    }
+
+    private static func folded(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
     }
 
     // MARK: - Helpers

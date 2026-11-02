@@ -73,8 +73,69 @@ public struct UIState: Equatable, Sendable, Codable {
     public var panels: [String: PanelPlacement] = [:]
     public var collapsedHeadings: [String] = []
     public var windowFrame: [Double]? = nil
+    /// Nodes whose branches are folded on the map.
+    public var collapsed: [String] = []
 
     public init() {}
+}
+
+// Settings files read whatever keys they have: a key an older build did not write, or a
+// value of the wrong type, takes its default instead of keeping the project from opening.
+extension KeyedDecodingContainer {
+    func value<T: Decodable>(_ key: Key, or fallback: T) -> T {
+        ((try? decodeIfPresent(T.self, forKey: key)) ?? nil) ?? fallback
+    }
+}
+
+extension UIState {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        viewportX = c.value(.viewportX, or: viewportX)
+        viewportY = c.value(.viewportY, or: viewportY)
+        zoom = c.value(.zoom, or: zoom)
+        panels = c.value(.panels, or: panels)
+        collapsedHeadings = c.value(.collapsedHeadings, or: collapsedHeadings)
+        windowFrame = c.value(.windowFrame, or: windowFrame)
+        collapsed = c.value(.collapsed, or: collapsed)
+    }
+}
+
+extension PanelPlacement {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        edge = c.value(.edge, or: edge)
+        open = c.value(.open, or: open)
+        x = c.value(.x, or: x)
+        y = c.value(.y, or: y)
+        width = c.value(.width, or: width)
+        height = c.value(.height, or: height)
+    }
+}
+
+extension Settings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        model = c.value(.model, or: model)
+        whisperModel = c.value(.whisperModel, or: whisperModel)
+        theme = c.value(.theme, or: theme)
+        layout = c.value(.layout, or: layout)
+        globalShortcut = c.value(.globalShortcut, or: globalShortcut)
+        optimizeEveryTurns = c.value(.optimizeEveryTurns, or: optimizeEveryTurns)
+    }
+}
+
+extension LayoutOptions {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        linkDistance = c.value(.linkDistance, or: linkDistance)
+        repulsion = c.value(.repulsion, or: repulsion)
+        headingPull = c.value(.headingPull, or: headingPull)
+        seed = c.value(.seed, or: seed)
+    }
 }
 
 public struct PanelPlacement: Equatable, Sendable, Codable {

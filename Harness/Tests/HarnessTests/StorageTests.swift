@@ -147,4 +147,30 @@ final class StorageTests: XCTestCase {
         XCTAssertNil(walk.current)
         XCTAssertEqual(walk.progress, 1)
     }
+
+    func testSettingsFilesReadWhateverKeysTheyHave() throws {
+        let decoder = JSONDecoder()
+        let cases: [(json: String, zoom: Double, collapsed: [String], width: Double)] = [
+            ("{}", 1, [], 320),
+            (#"{"zoom": 2, "panels": {"details": {"width": 400}}}"#, 2, [], 400),
+            (#"{"zoom": "big", "collapsed": ["a"]}"#, 1, ["a"], 320),
+        ]
+        for c in cases {
+            let ui = try decoder.decode(UIState.self, from: Data(c.json.utf8))
+            XCTAssertEqual(ui.zoom, c.zoom, c.json)
+            XCTAssertEqual(ui.collapsed, c.collapsed, c.json)
+            XCTAssertEqual(ui.panels["details"]?.width ?? 320, c.width, c.json)
+        }
+        let settings = try decoder.decode(Settings.self, from: Data(#"{"model": {"model": "llama3"}, "theme": "dark"}"#.utf8))
+        XCTAssertEqual(settings.model.model, "llama3")
+        XCTAssertEqual(settings.model.host, "http://localhost:11434")
+        XCTAssertTrue(settings.model.useGrammar)
+        XCTAssertEqual(settings.theme, "dark")
+        XCTAssertEqual(settings.layout, LayoutOptions())
+        // What is written reads back the same.
+        var ui = UIState()
+        ui.collapsed = ["x"]
+        ui.windowFrame = [1, 2, 3, 4]
+        XCTAssertEqual(try decoder.decode(UIState.self, from: JSONEncoder().encode(ui)), ui)
+    }
 }

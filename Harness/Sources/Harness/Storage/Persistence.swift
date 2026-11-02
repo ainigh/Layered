@@ -28,7 +28,7 @@ public enum Persistence {
                       context: ContextDocument(markdown: try storage.readContext()),
                       settings: try storage.readSettings() ?? Settings(),
                       prompts: prompts,
-                      ui: try storage.readUIState() ?? UIState())
+                      ui: ((try? storage.readUIState()) ?? nil) ?? UIState())
     }
 
     /// Appends the log tail, new evidence and new texts that `after` has beyond `before`.

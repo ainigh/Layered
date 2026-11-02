@@ -27,6 +27,16 @@ jobs:
       - run: swift test
         working-directory: Harness
 
+  # The web map (web/): Node alone, no packages. It does not hold up the app's release.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node web/test/check.js
+
   # Only once the Linux tests pass: a release never carries code that fails them.
   build:
     needs: test

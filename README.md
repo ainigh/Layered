@@ -5,6 +5,7 @@ A macOS menu bar app that turns pasted text or a dropped recording into a living
 ```
 Harness/   pure Swift package, no UI: notation, gate, evidence, model layer, storage, history, layout, export
 App/       the SwiftUI menu bar app, a thin projection of Harness.MapState
+web/       the map in a web page: the notation, the layout and both auto-arrange buttons, ported to JavaScript (open web/index.html)
 docs/      the notation
 scripts/   build-app.sh: builds, signs and zips Mindmap.app (CI and the updater run it)
 ```

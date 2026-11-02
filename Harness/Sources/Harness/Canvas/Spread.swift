@@ -58,6 +58,9 @@ public struct Spread: Sendable {
     private var branches: [[Int]] = []
     static let maxBranch = 20
     private let linksAt: [[Int]]
+    /// The links at each node that are checked as it moves: those kept clear (the others'
+    /// curves never matter, so they are not worked out again).
+    private var keptAt: [[Int]] = []
     private(set) var lines: [Line]
     /// Links kept clear: the trees', and cross-links clear of everything at the start.
     var kept: [Bool]
@@ -106,7 +109,7 @@ public struct Spread: Sendable {
             return out.count > 1 && out.count <= Self.maxBranch ? out : []
         }
         lines = []
-        kept = ProcessInfo.processInfo.environment["NOLINKS"] != nil ? tree.map { _ in false } : tree
+        kept = tree
         self.gap = max(0, gap)
         self.viewWidth = max(1, viewWidth)
         self.viewHeight = max(1, viewHeight)
@@ -117,12 +120,13 @@ public struct Spread: Sendable {
         for i in boxes.indices { nodeCells.put(i, Self.area(boxes[i])) }
         for e in links.indices where kept[e] { lineCells.put(e, Self.area(lines[e])) }
         // Cross-links clear of the trees, the nodes and each other are kept clear too.
-        for e in links.indices where !kept[e] && ProcessInfo.processInfo.environment["NOLINKS"] == nil {
+        for e in links.indices where !kept[e] {
             var clear = true
             clashes(ofLink: e) { _ in clear = false; return false }
             if clear { kept[e] = true; lineCells.put(e, Self.area(lines[e])) }
         }
         for e in links.indices where kept[e] { clashes(ofLink: e) { allowed.insert($0); return true } }
+        keptAt = linksAt.map { $0.filter { kept[$0] } }
         best = zoom
         finished = boxes.count < 2
     }
@@ -264,9 +268,9 @@ public struct Spread: Sendable {
             let after = overlap(next, boxes[j])
             if after > 0, after > overlap(boxes[i], boxes[j]) { return .blocked(MapLayout.Point(x: boxes[j].cx, y: boxes[j].cy), by: j) }
         }
-        let was = boxes[i]
-        let wasLines = linksAt[i].map { lines[$0] }
-        place(i, next, linksAt[i].map { (e: $0, line: line(moved: i, to: next, $0)) })
+        let was = boxes[i], mine = keptAt[i]
+        let wasLines = mine.map { lines[$0] }
+        place(i, next, mine.map { (e: $0, line: line(moved: i, to: next, $0)) })
         var hit: Int?
         clashes(of: i) { code in
             if allowed.contains(code) { return true }
@@ -274,7 +278,7 @@ public struct Spread: Sendable {
             return false
         }
         guard let code = hit else { return .moved }
-        place(i, was, Array(zip(linksAt[i], wasLines)))
+        place(i, was, Array(zip(mine, wasLines)))
         return .blocked(obstacle(code, moving: i), by: nil)
     }
 
@@ -294,7 +298,7 @@ public struct Spread: Sendable {
             }
         }
         let was = group.map { boxes[$0] }
-        let touched = Spread.ordered(group.flatMap { linksAt[$0] })
+        let touched = Spread.ordered(group.flatMap { keptAt[$0] })
         let wasLines = touched.map { lines[$0] }
         for i in group {
             boxes[i].x += dx; boxes[i].y += dy
@@ -578,7 +582,6 @@ public struct Spread: Sendable {
             for (i, b) in boxes.enumerated() { for key in Self.keys(b, reach) { cells[key, default: []].append(i) } }
         }
 
-        /// In index order, so a spread comes out the same every time.
         /// In a fixed order, so a spread comes out the same every time (a node near two cells
         /// may come twice).
         func near(_ b: Box) -> [Int] {

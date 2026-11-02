@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Layered Map</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="drawer" aria-label="Notation">
+      <header class="drawer-head">
+        <h1>Notation</h1>
+        <select id="example" aria-label="Example map"></select>
+      </header>
+      <textarea id="source" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Map notation"></textarea>
+      <div id="problem" role="status" hidden></div>
+      <details class="cheats">
+        <summary>How the notation works</summary>
+        <dl>
+          <dt><code>| ana - reviews | paper</code></dt><dd>two nodes, a labelled link from ana to paper</dd>
+          <dt><code>| ana - knows - | sam</code></dt><dd><code>- |</code> makes the link undirected</dd>
+          <dt><code>| a | b | c</code></dt><dd>a chain of links</dd>
+          <dt><code>| paper @date 2026-11-03</code></dt><dd>a note on a node (on a link: before its <code>|</code>)</dd>
+          <dt><code>@kind person</code></dt><dd>its icon: person, place, thing, action, event, idea</dd>
+          <dt><code>@src world</code></dt><dd>a card for the model's extras: world, guess, advice</dd>
+          <dt><code>| old = new</code></dt><dd>rename (or merge); <code>| old =</code> deletes</dd>
+          <dt><code># heading</code></dt><dd>any line not starting with <code>|</code> is a comment</dd>
+        </dl>
+      </details>
+    </aside>
+
+    <main id="stage">
+      <canvas id="map" aria-label="Mind map"></canvas>
+
+      <div class="corner top-left">
+        <button id="toggle-drawer" class="pill" title="Show or hide the notation (N)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>
+          <span>Notation</span>
+        </button>
+        <span id="counts" class="pill quiet"></span>
+      </div>
+
+      <div class="corner top-right">
+        <div id="results" class="card" hidden></div>
+      </div>
+
+      <div class="corner bottom-left">
+        <span id="status" class="pill quiet"></span>
+      </div>
+
+      <div class="corner bottom-right">
+        <div class="bar spacing" title="Spacing: the least room between two nodes when filling the view">
+          <span id="spacing-value">24</span>
+          <input id="spacing" type="range" min="0" max="120" step="2" value="24" aria-label="Spacing" orient="vertical">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16M7 9l-3 3 3 3M17 9l3 3-3 3"/></svg>
+        </div>
+        <div class="bar tools">
+          <button id="zoom-in" title="Zoom in (+)"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button id="zoom-out" title="Zoom out (−)"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+          <button id="fit" title="Fit the map (0)"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5"/></svg></button>
+          <button id="fill" title="Fill the view: nodes move into the room around them until the map can zoom in no further, never crossing a link (F; undo puts them back)">
+            <svg viewBox="0 0 24 24"><path d="M4 20 15 9M13.5 7.5l3 3M17 3v3M15.5 4.5h3M20 8v2M19 9h2M10 3.5v1.5M9.25 4.25h1.5"/></svg>
+          </button>
+          <button id="arrange" title="Arrange to fit: the map rearranged to the view's shape (a root's branches on both sides or round it, trees side by side), then filled the same way (A; undo puts it back)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="4.6" r="1.8"/><circle cx="12" cy="19.4" r="1.8"/><circle cx="5.6" cy="8.3" r="1.8"/><circle cx="18.4" cy="8.3" r="1.8"/><circle cx="5.6" cy="15.7" r="1.8"/><circle cx="18.4" cy="15.7" r="1.8"/></svg>
+          </button>
+          <button id="undo" title="Undo the last arrangement (⌘Z)" disabled><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+        </div>
+      </div>
+
+      <div id="hover-card" class="card" hidden></div>
+    </main>
+  </div>
+
+  <script src="js/notation.js"></script>
+  <script src="js/layout.js"></script>
+  <script src="js/spread.js"></script>
+  <script src="js/arrange.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/examples.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

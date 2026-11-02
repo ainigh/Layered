@@ -2,7 +2,7 @@ import Foundation
 
 extension MapLayout {
     /// A fresh arrangement shaped to the view, for Fill the view's second button: the same
-    /// trees, rearranged in two ways that never cross a link, whichever fits the view best:
+    /// trees, rearranged in ways that never cross a link, whichever lets the view fill most:
     ///
     ///   · both sides: a root's branches split between its right and its left, the left ones
     ///     mirrored (a root has no link coming in, so either side is free), which halves a
@@ -14,8 +14,8 @@ extension MapLayout {
     ///     than stacked in one.
     ///
     /// Each candidate is checked link by link; one that would tangle the trees more than the
-    /// map as drawn is passed over (the map as drawn is always a candidate). Every node is placed (pinned), as
-    /// `placing` does, so the spread can start from it.
+    /// map as drawn is passed over (the map as drawn is always a candidate). Every node is
+    /// placed (pinned), as `placing` does, so the spread can start from it.
     public func arranged(toFit viewWidth: Double, _ viewHeight: Double, gap: Double = 24) -> MapLayout {
         guard nodes.count > 1 else { return self }
         // The map as drawn, and what it already has tangled (two links leaving one node side by
@@ -38,17 +38,18 @@ extension MapLayout {
             if !candidates.contains(laid), Spread.tangles(laid).isSubset(of: already) { candidates.append(laid) }
         }
         // Judged by how far a spread from each gets (a short one), or on a large map by how
-        // well it fits as it is; the plainer (earlier) wins a near tie.
+        // well it fits as it is. In a near tie (within 2%) the one with fewer links crossing
+        // wins, and then the plainer (earlier).
         func score(_ l: MapLayout) -> Double {
             guard nodes.count <= Self.trialNodes else { return fit(l) }
             var spread = Spread(layout: l, viewWidth: viewWidth, viewHeight: viewHeight, gap: gap)
             spread.run(limit: Self.trialSteps)
             return spread.zoom
         }
-        var best = (layout: plain, score: score(plain))
+        var best = (layout: plain, score: score(plain), tangles: already.count)
         for c in candidates.dropFirst() {
-            let s = score(c)
-            if s > best.score * 1.02 { best = (c, s) }
+            let s = score(c), t = Spread.tangles(c).count
+            if s > best.score * 1.02 || (s >= best.score / 1.02 && t < best.tangles) { best = (c, max(s, best.score), t) }
         }
         return best.layout
     }

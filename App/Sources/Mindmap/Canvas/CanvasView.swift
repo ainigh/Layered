@@ -195,6 +195,7 @@ struct CanvasView: View {
                 if !touched { fit(layout: next, animate: true) }
             }
             .onChange(of: session.findRequests) { _, _ in openFind() }
+            .onChange(of: session.focusRequests) { _, _ in if let name = session.focused { bringIntoView(name) } }
             .onChange(of: findText) { _, _ in
                 findIndex = 0
                 if let first = live.search(findText, in: graph).first { show(found: first) }

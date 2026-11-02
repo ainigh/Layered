@@ -538,6 +538,19 @@ public struct MapLayout: Equatable, Sendable {
         return best?.name
     }
 
+    /// The way down to `name` in its tree: its root first, its parent last (empty for a root,
+    /// or a node not on the map).
+    public func ancestors(of name: String) -> [String] {
+        var out: [String] = []
+        var seen: Set<String> = [name]
+        var up = parent[name]
+        while let p = up, seen.insert(p).inserted {
+            out.append(p)
+            up = parent[p]
+        }
+        return out.reversed()
+    }
+
     /// The nodes of `graph` whose name, or a note shown under it, holds every word of `query`
     /// (ignoring case and accents): the shown ones in drawing order, top to bottom, then the
     /// folded-away ones by name. Empty for an empty query.

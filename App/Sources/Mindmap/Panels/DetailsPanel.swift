@@ -55,6 +55,23 @@ struct NodeDetails: View {
                 .frame(minWidth: 36)
                 Text(name).font(Theme.title).lineLimit(3).textSelection(.enabled)
             }
+            // Where it hangs in its tree: each step goes there on the map.
+            let path = session.layout.ancestors(of: name)
+            if !path.isEmpty {
+                HStack(spacing: 2) {
+                    ForEach(path, id: \.self) { step in
+                        Button(step) { session.focus(step) }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .help("Go to \(step)")
+                        Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
+                    }
+                    Text(name).lineLimit(1).foregroundStyle(.primary)
+                }
+                .font(Theme.caption)
+                .truncationMode(.middle)
+            }
             HStack(spacing: Theme.Space.xs) {
                 if let kind { Pill(text: kind, tint: Theme.kind(kind)) }
                 Pill(text: Provenance.title(src), tint: Provenance.tint(src))
@@ -78,7 +95,7 @@ struct NodeDetails: View {
                 ForEach(edges, id: \.key) { edge in
                     let other = edge.a == node.id ? edge.b.name : edge.a.name
                     let out = edge.a == node.id ? edge.forward : edge.backward
-                    Button { session.selection = [other] } label: {
+                    Button { session.focus(other) } label: {
                         HStack(spacing: Theme.Space.xs) {
                             Image(systemName: out ? "arrow.right" : "arrow.left").font(Theme.caption).foregroundStyle(.tertiary)
                             if !edge.labels.isEmpty { Text(edge.labels.joined(separator: ", ")).font(Theme.caption).foregroundStyle(.secondary) }
@@ -94,6 +111,12 @@ struct NodeDetails: View {
             HStack {
                 Button { session.expand(name) } label: { Label("Expand", systemImage: "sparkles") }
                     .disabled(session.running != nil)
+                if let placed = session.layout[name], placed.childCount > 0 {
+                    Button { session.toggleFold(name) } label: {
+                        Label(placed.hiddenCount > 0 ? "Open branch" : "Fold branch", systemImage: placed.hiddenCount > 0 ? "plus.circle" : "minus.circle")
+                    }
+                    .help(placed.hiddenCount > 0 ? "Show the \(placed.hiddenCount) nodes folded under it (/)" : "Hide what hangs under it on the map (/)")
+                }
                 if ["world", "guess", "advice"].contains(src ?? "") {
                     Button { session.dispatch(.confirm(name)) } label: { Label("Confirm", systemImage: "checkmark") }
                         .help("Mark it as yours")

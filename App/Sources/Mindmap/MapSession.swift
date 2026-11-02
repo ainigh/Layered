@@ -83,6 +83,9 @@ final class MapSession {
     var contextRequests = 0
     /// Bumped by Map › Find on the map (⌘F): the canvas opens its find bar.
     var findRequests = 0
+    /// Bumped to bring `focused` into view on the map (a node picked in a panel).
+    var focusRequests = 0
+    private(set) var focused: String?
     /// The Add text box, kept as it is typed.
     var composerDraft = "" { didSet { UserDefaults.standard.set(composerDraft, forKey: "draft:\(title)") } }
 
@@ -187,6 +190,16 @@ final class MapSession {
         ui.collapsed = []
         saveUI()
         relayout()
+    }
+
+    /// Selects a node and brings it into view on the map, opening any fold that hides it.
+    func focus(_ name: String) {
+        guard state.graph.node(name) != nil else { return }
+        reveal(name)
+        selection = [name]
+        selectedEdge = nil
+        focused = name
+        focusRequests += 1
     }
 
     /// Opens whatever folds hide `name`, so it is on the map.

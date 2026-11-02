@@ -237,7 +237,7 @@ struct OutlinePanel: View {
                             ForEach(item.comments, id: \.self) { Text($0).font(Theme.caption).italic().foregroundStyle(.secondary).textSelection(.enabled).padding(.leading, CGFloat(item.level) * Theme.Space.m) }
                             ForEach(item.nodes, id: \.self) { name in
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Button { session.selection = [name] } label: {
+                                    Button { session.focus(name) } label: {
                                         HStack { NodeChip(name: name, graph: session.state.graph); Spacer() }
                                     }.buttonStyle(.plain)
                                     ForEach(Outline.comments(attachedTo: name, in: session.state.graph), id: \.self) { Text($0).font(Theme.caption).italic().textSelection(.enabled).padding(.leading, Theme.Space.m) }

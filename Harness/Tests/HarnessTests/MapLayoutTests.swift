@@ -268,6 +268,9 @@ final class MapLayoutTests: XCTestCase {
             ("missing", .left, nil),
         ]
         for c in cases { XCTAssertEqual(map.neighbour(of: c.from, c.direction), c.to, "\(c.from) \(c.direction)") }
+        XCTAssertEqual(map.ancestors(of: "d"), ["hub", "b"])
+        XCTAssertEqual(map.ancestors(of: "hub"), [])
+        XCTAssertEqual(map.ancestors(of: "missing"), [])
     }
 
     func testSearchFindsNamesAndNotesInDrawingOrder() throws {

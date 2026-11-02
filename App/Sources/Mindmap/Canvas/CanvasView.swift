@@ -547,9 +547,11 @@ struct CanvasView: View {
             world.stroke(ghost, with: .color(Theme.Map.tertiary.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
         }
         // What a box being drawn would select, lit as the box grows.
-        let boxed: CGRect? = boxSelect.map { box in
+        var boxed: CGRect?
+        if let box = boxSelect {
             let a = v.map(box.start), b = v.map(box.end)
-            return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+            let x0: Double = min(a.x, b.x), y0: Double = min(a.y, b.y)
+            boxed = CGRect(x: x0, y: y0, width: abs(a.x - b.x), height: abs(a.y - b.y))
         }
         for p in layout.nodes {
             let rect = CGRect(x: p.x, y: p.y, width: p.w, height: p.h)
@@ -584,16 +586,19 @@ struct CanvasView: View {
             let start = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.h / 2))
             var end = linkDrag.to
             if let t = target {
-                let r = CGRect(origin: v.screen(MapLayout.Point(x: t.x, y: t.y)), size: CGSize(width: t.w * v.k, height: t.h * v.k)).insetBy(dx: -4, dy: -4)
-                ctx.fill(Path(roundedRect: r, cornerRadius: (Theme.Map.corner + 4) * v.k), with: .color(Theme.accent.opacity(0.12)))
-                ctx.stroke(Path(roundedRect: r, cornerRadius: (Theme.Map.corner + 4) * v.k), with: .color(Theme.accent), lineWidth: 1.5)
+                let origin = v.screen(MapLayout.Point(x: t.x, y: t.y))
+                let w: CGFloat = CGFloat(t.w) * v.k, h: CGFloat = CGFloat(t.h) * v.k
+                let r = CGRect(x: origin.x, y: origin.y, width: w, height: h).insetBy(dx: -4, dy: -4)
+                let corner: CGFloat = (Theme.Map.corner + 4) * v.k
+                ctx.fill(Path(roundedRect: r, cornerRadius: corner), with: .color(Theme.accent.opacity(0.12)))
+                ctx.stroke(Path(roundedRect: r, cornerRadius: corner), with: .color(Theme.accent), lineWidth: 1.5)
                 end = CGPoint(x: r.minX, y: r.midY)
             }
             var path = Path()
             path.move(to: start)
             path.addLine(to: end)
             ctx.stroke(path, with: .color(Theme.accent), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [5, 4]))
-            arrow(&ctx, tip: MapLayout.Point(x: end.x, y: end.y), from: MapLayout.Point(x: start.x, y: start.y), colour: Theme.accent, scale: 1.4)
+            arrow(&ctx, tip: MapLayout.Point(x: Double(end.x), y: Double(end.y)), from: MapLayout.Point(x: Double(start.x), y: Double(start.y)), colour: Theme.accent, scale: 1.4)
         }
     }
 

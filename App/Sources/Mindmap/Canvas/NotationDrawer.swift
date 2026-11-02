@@ -103,7 +103,7 @@ struct NotationEditor: View {
             HStack(spacing: Theme.Space.s) {
                 if let problem {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(problem.description).foregroundStyle(.orange).lineLimit(2).textSelection(.enabled)
+                    Text(problem.description).foregroundStyle(.orange).lineLimit(2).textSelection(.enabled).help(problem.description)
                     Spacer(minLength: 0)
                     Button("Revert to the map", action: reload).controlSize(.small)
                 } else if pending {
@@ -206,7 +206,7 @@ struct HeldBackList: View {
                                 .padding(.horizontal, 6).padding(.vertical, 1)
                                 .background((event.kind == .dropped ? Color.red : Color.secondary).opacity(0.15), in: Capsule())
                                 .foregroundStyle(event.kind == .dropped ? Color.red : Color.secondary)
-                            Text(event.raw).font(Theme.caption.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                            Text(event.raw).font(Theme.caption.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(event.raw)
                         }
                         Text(event.reason).font(Theme.caption).foregroundStyle(.secondary).textSelection(.enabled)
                         if !event.result.isEmpty {

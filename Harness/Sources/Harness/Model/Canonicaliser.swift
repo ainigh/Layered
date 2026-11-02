@@ -121,12 +121,18 @@ public enum Canonicaliser {
         let normal = sorted.map(canonical)
         let scalars = normal.map { Array($0.unicodeScalars) }
         let counts = sorted.map(\.count)
+        // Only names whose normal forms are within two letters in length can match (the same
+        // normal form has the same length), so each name meets only those.
+        var byLength: [Int: [Int]] = [:]
+        for (i, s) in scalars.enumerated() { byLength[s.count, default: []].append(i) }
         for i in sorted.indices {
-            for j in sorted.indices where j > i {
+            let n = scalars[i].count
+            let near = (n - 2...n + 2).flatMap { byLength[$0] ?? [] }.filter { $0 > i }.sorted()
+            for j in near {
                 let a = sorted[i], b = sorted[j]
                 if normal[i] == normal[j] {
                     out.append((a, b, "same normal form"))
-                } else if min(counts[i], counts[j]) >= 5, abs(scalars[i].count - scalars[j].count) <= 2, within(scalars[i], scalars[j], 2) {
+                } else if min(counts[i], counts[j]) >= 5, within(scalars[i], scalars[j], 2) {
                     out.append((a, b, "edit distance ≤ 2"))
                 }
             }

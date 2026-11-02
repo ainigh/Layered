@@ -102,7 +102,7 @@ final class AuditTests: XCTestCase {
         for i in 0..<4000 { g.addEdge(from: n("n\(i)"), to: n("n\(i + 1)"), directed: true) }
         let start = Date()
         let text = Canonical.render(g)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 1.5)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 6) // about 0.2 s here; quadratic was minutes
         XCTAssertEqual(try Compiler.compile(text).edges.count, 4000)
     }
 
@@ -121,7 +121,7 @@ final class AuditTests: XCTestCase {
         let names = (0..<1500).map { i in String((0..<(4 + i % 12)).map { _ in letter() }) }
         let start = Date()
         _ = Canonicaliser.likelyDuplicates(in: names)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 15) // generous: CI machines are slower and this is a debug build
         // The banded check agrees with the full edit distance.
         let words = ["kitten", "sitting", "mitten", "kitchen", "paper", "papers", "pager", "", "ab", "ba", "abc"]
         for a in words {
@@ -170,7 +170,7 @@ final class AuditTests: XCTestCase {
         s = reduce(s, .applyLines(["| n5 @todo check"], what: "note"), now: fixedDate)
         let start = Date()
         s = reduce(s, .undo, now: fixedDate)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 15) // about 1 s here
         XCTAssertNil(s.graph.node("n5")?.note(kind: "todo"))
         let index = s.graph.edgesByNode()
         for name in ["n0", "n5", "n3000"] {

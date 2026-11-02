@@ -436,6 +436,8 @@ Ana reviews the paper.
 
 **Fill the view** first arranges the map afresh (pins ignored), shows that for a moment, then spreads it. Nothing tangles while it spreads: at no moment do two links cross, a link run through a node, or a node sit on a link. A node whose next step would do that tries another way round or waits. A dashed cross-link that already crosses something in the fresh arrangement is the exception: it is left to cross what it crosses.
 
+**Arrange to fit** (the button under Fill the view, or **A**) does the same from an arrangement shaped to the view rather than the plain one. It considers three crossing-free rearrangements: a root's branches split between its right and its left (mirrored); a root whose branches are all single nodes ringed by them on an ellipse; and the trees, which no tree link joins, set side by side in columns. It checks each one link by link, gives each a short trial spread (on maps up to 150 nodes; larger ones go by how well each fits), and spreads from the one that gets furthest. It sits beside Fill the view so the two can be compared, and one undo puts the map back the same way.
+
 **Optimize in the notation drawer.** The drawer’s top right has **Optimize**: it applies an edit still waiting, rewrites the log as the canonical form (the old log is archived), tidies the text to match, and says how many lines it saved.
 
 

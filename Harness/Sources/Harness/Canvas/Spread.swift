@@ -61,6 +61,8 @@ public struct Spread: Sendable {
     private(set) var lines: [Line]
     /// Links kept clear: the trees', and cross-links clear of everything at the start.
     var kept: [Bool]
+    /// Which links are the trees'.
+    private let tree: [Bool]
     /// Clashes among kept links at the start, which may stay.
     var allowed = Set<Int>()
     /// Where the nodes and the kept links are, so a check looks only at what is near.
@@ -95,6 +97,7 @@ public struct Spread: Sendable {
         }
         self.links = links
         self.linksAt = linksAt
+        self.tree = tree
         var kids = Array(repeating: [Int](), count: boxes.count)
         for (p, cs) in layout.children { if let pi = layout.index[p] { kids[pi] = cs.compactMap { layout.index[$0] } } }
         branches = boxes.indices.map { i in
@@ -122,6 +125,18 @@ public struct Spread: Sendable {
         for e in links.indices where kept[e] { clashes(ofLink: e) { allowed.insert($0); return true } }
         best = zoom
         finished = boxes.count < 2
+    }
+
+    /// Where the trees' links cross one another or run through a node in this layout (all its
+    /// nodes pinned, as Fill the view places them), as numbers that mean the same between two
+    /// placings of one layout.
+    static func tangles(_ layout: MapLayout) -> Set<Int> {
+        let s = Spread(layout: layout, viewWidth: 1, viewHeight: 1, gap: 0)
+        let pairs = s.links.count * s.links.count
+        return s.allowed.filter { code in
+            if code < pairs { return s.tree[code / s.links.count] && s.tree[code % s.links.count] }
+            return (code - pairs) % 2 == 1 && s.tree[(code - pairs) / 2 / s.boxes.count]
+        }
     }
 
     /// The zoom that fits the nodes in the view.

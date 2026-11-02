@@ -32,18 +32,26 @@ final class SpreadBenchTests: XCTestCase {
 
     func testGains() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["SPREAD_BENCH"] != nil, "set SPREAD_BENCH=1 to run")
-        var total = 0.0, runs = 0.0
+        // Zoom against the plain arrangement fitted, from it and from the one shaped to the view.
+        var total = [0.0, 0.0], runs = 0.0
         for (name, map) in try maps() {
             for view in [(1200.0, 700.0), (700.0, 1100.0)] {
-                var spread = Spread(layout: map, viewWidth: view.0, viewHeight: view.1, gap: 24)
-                let before = spread.zoom, start = Date()
-                spread.run()
-                total += log(spread.zoom / before)
+                let before = Spread(layout: map, viewWidth: view.0, viewHeight: view.1, gap: 24).zoom
+                var line = String(format: "%-8@ %4.0f×%-4.0f", name as NSString, view.0, view.1)
+                let clock = Date()
+                let shapedStart = map.arranged(toFit: view.0, view.1, gap: 24)
+                line += String(format: "  [arranging %.2f s]", Date().timeIntervalSince(clock))
+                for (k, start) in [map, shapedStart].enumerated() {
+                    var spread = Spread(layout: start, viewWidth: view.0, viewHeight: view.1, gap: 24)
+                    let shaped = spread.zoom / before, clock = Date()
+                    spread.run()
+                    total[k] += log(spread.zoom / before)
+                    line += String(format: "  %@ start ×%.2f → ×%.2f (%.2f s)", k == 0 ? "plain" : "shaped", shaped, spread.zoom / before, Date().timeIntervalSince(clock))
+                }
                 runs += 1
-                print(String(format: "%-8@ %4.0f×%-4.0f zoom ×%.2f  %4d steps  %.2f s", name as NSString, view.0, view.1,
-                             spread.zoom / before, spread.steps, Date().timeIntervalSince(start)))
+                print(line)
             }
         }
-        print(String(format: "geometric mean zoom ×%.3f", exp(total / runs)))
+        print(String(format: "geometric mean zoom: plain ×%.3f, shaped ×%.3f", exp(total[0] / runs), exp(total[1] / runs)))
     }
 }

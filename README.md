@@ -48,7 +48,7 @@ Or open `App/Package.swift` in Xcode for previews and snapshot tests.
 
 ## On the map
 
-The map glides when it changes, new ideas growing out of their parents. Branches fold (the **−** where a branch leaves a node; **+n** opens it again), **⌘F** finds nodes by name or note, and an overview in the bottom right shows where you are on a large map. With a node selected the arrow keys walk the tree, **↩** renames, **space** opens its details and **/** folds its branch. Press **?** on the map for every key. On first launch the app asks for a folder to keep maps in; each folder inside it is a project with one map. It runs with no model: **Try a demo** makes a demo project (tiny, typical or large) backed by recorded model responses.
+The map glides when it changes, new ideas growing out of their parents. Branches fold (the **−** where a branch leaves a node; **+n** opens it again), **F** fills the view (nodes slide into the room around them, never crossing a link) and **A** does it from an arrangement shaped to the window (branches on both sides of a root or round it, trees side by side), **⌘F** finds nodes by name or note, and an overview in the bottom right shows where you are on a large map. With a node selected the arrow keys walk the tree, **↩** renames, **space** opens its details and **/** folds its branch. Press **?** on the map for every key. On first launch the app asks for a folder to keep maps in; each folder inside it is a project with one map. It runs with no model: **Try a demo** makes a demo project (tiny, typical or large) backed by recorded model responses.
 
 ## Where things live
 

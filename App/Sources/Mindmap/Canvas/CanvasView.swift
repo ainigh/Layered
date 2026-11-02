@@ -13,13 +13,16 @@ import Harness
 ///   ⇧-drag                select a box           right-click   the node's actions
 ///   click a node          select it: ⓘ beside it opens its details, ✎ renames it, ✦ expands it
 ///   F, ✦                  fill the view          spacing       the least room between nodes
+///   A                     arrange to fit, then fill
 ///
 /// The map fits the view when it opens and refits as the window resizes or the map grows,
 /// until the user moves or zooms it. Buttons, keys and fit glide; drags follow the hand.
 /// Fill the view fits the map, then lets its nodes slide into the room around them and
 /// refits as they go, until zooming in gains nothing more (`Spread`); no frame of it has two
 /// links crossing or a link through a node. Where they end up is pinned in one turn, so one
-/// undo puts the map back.
+/// undo puts the map back. Arrange to fit (the button under it) does the same from an
+/// arrangement shaped to the view (`MapLayout.arranged(toFit:)`: a root's branches on both
+/// sides or round it, trees side by side), to compare with.
 ///
 /// What the model added and the user has not decided on yet (`session.review`) wears a
 /// dashed ring, with ✓ (keep it) and ✕ (delete it) above its top right corner; a link
@@ -57,6 +60,8 @@ struct CanvasView: View {
     @State private var spreading: MapLayout?
     @State private var spreadTask: Task<Void, Never>?
     @State private var spreadFrom: MapLayout?
+    /// The spread under way (or the last one) starts from an arrangement shaped to the view.
+    @State private var spreadShaped = false
     /// The least room Fill the view leaves between two nodes, in map points.
     @AppStorage("map.spacing") private var spacing: Double = 24
     /// The map gliding from one layout to the next, and where the next glide starts when the
@@ -171,7 +176,8 @@ struct CanvasView: View {
                 VStack(spacing: Theme.Space.s) {
                     SpacingBar(spacing: $spacing) { fillView(restart: true) }
                     ZoomBar(zoomIn: { zoom(by: Theme.Map.zoomStep) }, zoomOut: { zoom(by: 1 / Theme.Map.zoomStep) }, fit: refit,
-                            fill: { fillView() }, filling: spreadTask != nil, minimap: $minimapOn)
+                            fill: { fillView(shaped: false) }, filling: spreadTask != nil && !spreadShaped,
+                            arrange: { fillView(shaped: true) }, arranging: spreadTask != nil && spreadShaped, minimap: $minimapOn)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .padding(Theme.Space.m)
@@ -374,22 +380,27 @@ struct CanvasView: View {
 
     /// Fill the view: the map arranged afresh (its pins ignored) and fitted, then its nodes
     /// slide into the room around them while it refits, until zooming in gains nothing more.
-    /// Pressed again while it runs, it stops there; `restart` starts it over (the spacing changed).
-    private func fillView(restart: Bool = false) {
+    /// `shaped`: arranged to fit the view first (Arrange to fit); left out, as last time.
+    /// Pressed again while it runs, it stops there (the other one starts over from its own
+    /// arrangement); `restart` starts it over (the spacing changed).
+    private func fillView(restart: Bool = false, shaped: Bool? = nil) {
+        let shaped = shaped ?? spreadShaped
         if spreadTask != nil {
             finishSpread(commit: true)
-            if !restart { return }
+            if !restart, shaped == spreadShaped { return }
         }
         let live = session.displayedLayout
         guard size.width > 0, session.viewingTurn == nil, live.nodes.count > 1 else { refit(); return }
-        let start = session.autoArranged()
+        let fresh = session.autoArranged()
         let pad = Theme.Map.fitPad
-        let first = Spread(layout: start, viewWidth: Double(size.width - 2 * pad), viewHeight: Double(size.height - 2 * pad),
-                           gap: spacing, maxZoom: Double(Theme.Map.maxZoom))
+        let viewWidth = Double(size.width - 2 * pad), viewHeight = Double(size.height - 2 * pad), gap = spacing
         touched = false
         spreadFrom = live
+        spreadShaped = shaped
         spreadTask = Task { @MainActor in
-            var spread = first
+            // Shaping tries a few arrangements (a short spread from each): off the main thread.
+            let start = shaped ? await Task.detached(priority: .userInitiated) { fresh.arranged(toFit: viewWidth, viewHeight, gap: gap) }.value : fresh
+            var spread = Spread(layout: start, viewWidth: viewWidth, viewHeight: viewHeight, gap: gap, maxZoom: Double(Theme.Map.maxZoom))
             // The fresh arrangement first, for a moment, then the spread from there.
             guard !Task.isCancelled else { return }
             spreading = start
@@ -470,7 +481,8 @@ struct CanvasView: View {
         case "+", "=": zoom(by: Theme.Map.zoomStep); return true
         case "-", "_": zoom(by: 1 / Theme.Map.zoomStep); return true
         case "0": refit(); return true
-        case "f", "F": fillView(); return true
+        case "f", "F": fillView(shaped: false); return true
+        case "a", "A": fillView(shaped: true); return true
         case "m", "M": withAnimation(Theme.slide) { minimapOn.toggle() }; return true
         case "?": withAnimation(Theme.slide) { showKeys.toggle() }; return true
         case "z", "Z":
@@ -1353,16 +1365,18 @@ extension CGPoint {
     init(_ p: MapLayout.Point) { self.init(x: p.x, y: p.y) }
 }
 
-/// Zoom in, zoom out, fit and fill: a small bar in the bottom right corner.
+/// Zoom in, zoom out, fit, fill and arrange to fit: a small bar in the bottom right corner.
 struct ZoomBar: View {
-    /// Five 28 pt buttons, 2 pt apart, in 3 pt of padding: 5 × 28 + 4 × 2 + 2 × 3.
+    /// Six 28 pt buttons, 2 pt apart, in 3 pt of padding: 6 × 28 + 5 × 2 + 2 × 3.
     static let width: CGFloat = 34
-    static let height: CGFloat = 154
+    static let height: CGFloat = 184
     let zoomIn: () -> Void
     let zoomOut: () -> Void
     let fit: () -> Void
     let fill: () -> Void
     var filling = false
+    let arrange: () -> Void
+    var arranging = false
     /// The overview in the corner is wanted (it shows while some of the map is out of view).
     @Binding var minimap: Bool
 
@@ -1373,6 +1387,8 @@ struct ZoomBar: View {
             MapToolButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Fit the map (0)", action: fit)
             MapToolButton(symbol: "wand.and.stars", help: filling ? "Stop filling the view here (F)" : "Fill the view: nodes move into the room around them until the map can zoom in no further (F; undo puts them back)",
                           pressed: filling, action: fill)
+            MapToolButton(symbol: "circle.hexagongrid", help: arranging ? "Stop arranging here (A)" : "Arrange to fit: the map rearranged to the view's shape (a root's branches on both sides or round it, trees side by side), then filled the same way (A; undo puts it back)",
+                          pressed: arranging, action: arrange)
             MapToolButton(symbol: "map", help: minimap ? "Hide the overview of the whole map (M)" : "Show an overview of the whole map while some of it is out of view (M)",
                           pressed: minimap) { withAnimation(Theme.slide) { minimap.toggle() } }
         }
@@ -1506,7 +1522,7 @@ struct MapKeysCard: View {
 
     static let groups: [Group] = [
         Group(title: "Moving", keys: [Key(key: "drag, scroll", what: "move the map"), Key(key: "pinch, ⌘-scroll", what: "zoom about the pointer"),
-                                      Key(key: "+  −", what: "zoom in, out"), Key(key: "0", what: "fit the map"), Key(key: "F", what: "fill the view"),
+                                      Key(key: "+  −", what: "zoom in, out"), Key(key: "0", what: "fit the map"), Key(key: "F", what: "fill the view"), Key(key: "A", what: "arrange to fit, then fill"),
                                       Key(key: "M", what: "overview on or off"), Key(key: "⇧ arrows", what: "move the map")]),
         Group(title: "A selected node", keys: [Key(key: "← →", what: "its parent, its child"), Key(key: "↑ ↓", what: "the node above, below"),
                                                Key(key: "↩", what: "rename"), Key(key: "space", what: "details"), Key(key: "/", what: "fold or open its branch"),

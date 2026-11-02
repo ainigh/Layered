@@ -204,4 +204,64 @@ final class SpreadTests: XCTestCase {
         _ = assertNoNewClashes(map, view: (1400, 600))
         _ = assertNoNewClashes(map, view: (600, 1200))
     }
+
+    // MARK: - Arranged to fit
+
+    func hub() throws -> MapLayout {
+        MapLayout.compute(try Compiler.compile((1...14).map { "| hub - has | child \($0)" }.joined(separator: "\n")))
+    }
+
+    func testArrangingToFitTanglesNothingAndKeepsEveryNode() throws {
+        let typical = MapLayout.compute(MapLayout.unpinned(Demo.state(.typical).graph))
+        let forest = MapLayout.compute(try Compiler.compile((1...5).flatMap { t in (1...3).map { "| root \(t) - has | leaf \(t).\($0)" } }.joined(separator: "\n")))
+        for map in [try hub(), typical, forest] {
+            let trees = Set(map.edges.filter(\.tree).map { [$0.key.lo.name, $0.key.hi.name].sorted() })
+            let before = clashes(map.placing(Dictionary(uniqueKeysWithValues: map.nodes.map { ($0.id.name, $0.center) })), links: trees)
+            for view in [(1200.0, 700.0), (700.0, 1100.0)] {
+                let arranged = map.arranged(toFit: view.0, view.1)
+                XCTAssertEqual(Set(arranged.nodes.map(\.id.name)), Set(map.nodes.map(\.id.name)))
+                XCTAssertTrue(arranged.nodes.allSatisfy(\.pinned))
+                XCTAssertTrue(clashes(arranged, links: trees).isSubset(of: before), "\(clashes(arranged, links: trees).subtracting(before).sorted())")
+                for (i, a) in arranged.nodes.enumerated() {
+                    for b in arranged.nodes[(i + 1)...] {
+                        let apart = max(max(a.x, b.x) - min(a.x + a.w, b.x + b.w), max(a.y, b.y) - min(a.y + a.h, b.y + b.h))
+                        XCTAssertGreaterThan(apart, 0, "\(a.id.name) and \(b.id.name) overlap")
+                    }
+                }
+            }
+        }
+    }
+
+    func testAHubGoesRoundItsRootAndFillsMore() throws {
+        let map = try hub()
+        for view in [(1200.0, 700.0), (700.0, 1100.0)] {
+            let arranged = map.arranged(toFit: view.0, view.1)
+            let root = arranged["hub"]!
+            XCTAssertTrue(arranged.nodes.contains { $0.center.x < root.center.x - root.w }, "branches on its left too")
+            var plain = Spread(layout: map, viewWidth: view.0, viewHeight: view.1, gap: 24)
+            var shaped = Spread(layout: arranged, viewWidth: view.0, viewHeight: view.1, gap: 24)
+            plain.run()
+            shaped.run()
+            XCTAssertGreaterThan(shaped.zoom, plain.zoom * 1.3, "\(view)")
+        }
+        XCTAssertEqual(map.arranged(toFit: 1200, 700), map.arranged(toFit: 1200, 700), "the same every time")
+    }
+
+    func testTreesGoSideBySideInAWideView() throws {
+        let forest = MapLayout.compute(try Compiler.compile((1...5).flatMap { t in (1...3).map { "| root \(t) - has | leaf \(t).\($0)" } }.joined(separator: "\n")))
+        let arranged = forest.arranged(toFit: 1400, 500)
+        let roots = (1...5).map { arranged["root \($0)"]!.center.x }
+        XCTAssertGreaterThan(Set(roots).count, 1, "the trees no longer stand in one column")
+        XCTAssertGreaterThan(arranged.width / arranged.height, forest.width / forest.height)
+    }
+
+    func testSpreadingFromTheArrangementNeverTangles() throws {
+        let typical = MapLayout.compute(MapLayout.unpinned(Demo.state(.typical).graph))
+        for map in [try hub(), typical] {
+            for view in [(1200.0, 700.0), (700.0, 1100.0)] {
+                _ = assertNoNewClashes(map.arranged(toFit: view.0, view.1), view: view, gap: 24)
+            }
+        }
+    }
 }
+

@@ -77,7 +77,9 @@ public struct MapState: Equatable, Sendable {
             try graph.apply(parsed)
             self.log.append(parsed.raw)
             if case .comment(let text) = parsed.line, let turn = Turn.parse(header: text) {
-                if let last = turns.last { snapshots[last.number] = Canonical.render(graphBefore) }
+                // The map before this turn: the turn before's result, or (for the first turn) what
+                // the log held before any turn, so undoing it never goes back further than that.
+                snapshots[turns.last?.number ?? turn.number - 1] = Canonical.render(graphBefore)
                 turns.append(turn)
                 recordStacks(turn)
             } else if !turns.isEmpty {
@@ -175,10 +177,16 @@ public struct MapState: Equatable, Sendable {
             do {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
-                try scratch.apply(try parser.parseLine(trimmed))
+                let parsed = try parser.parseLine(trimmed)
+                // A turn header from outside (an imported log) would read as a turn of its own.
+                if case .comment(let text) = parsed, Turn.parse(header: text) != nil {
+                    errors.append("`@turn` lines are written by the app: \(line)")
+                    continue
+                }
+                try scratch.apply(parsed)
                 applied.append(trimmed)
             } catch {
-                errors.append("\(error): \(line)")
+                errors.append("\((error as? NotationError)?.message ?? "\(error)"): \(line)")
             }
         }
         guard !applied.isEmpty else { return }
@@ -346,8 +354,8 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
 
     case .comment(let name, let text):
         guard state.graph.node(name) != nil, !Text.collapse(text).isEmpty else { break }
-        // A comment cannot start with `|` (that would make it a statement).
-        let body = Text.collapse(Text.collapse(text).drop { $0 == "|" })
+        // A comment cannot start with `|` (a statement) or `#` (a heading).
+        let body = Text.collapse(Text.collapse(text).drop { $0 == "|" || $0 == "#" || $0 == " " })
         guard !body.isEmpty else { break }
         state.appendTurn(who: "user", what: "comment \(name)", lines: ["| \(name)", body], now: now)
 
@@ -362,7 +370,7 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
         state.appendTurn(who: "user", what: "link \(a) \(b)", lines: lines, now: now)
 
     case .pin(let name, let x, let y):
-        guard state.graph.node(name) != nil else { break }
+        guard state.graph.node(name) != nil, Position(noteValue: Position(x: x, y: y).noteValue) != nil else { break }
         state.appendTurn(who: "user", what: "move \(name)", lines: ["| \(name) @pos \(Position(x: x, y: y).noteValue)"], now: now)
 
     case .arrange(let places):
@@ -417,11 +425,16 @@ public struct Position: Equatable, Sendable {
 
     public init?(noteValue: String) {
         let parts = noteValue.split(separator: ",")
-        guard parts.count == 2, let x = Double(parts[0].trimmingCharacters(in: .whitespaces)), let y = Double(parts[1].trimmingCharacters(in: .whitespaces)) else { return nil }
+        guard parts.count == 2, let x = Double(parts[0].trimmingCharacters(in: .whitespaces)), let y = Double(parts[1].trimmingCharacters(in: .whitespaces)),
+              // Somewhere on a map: not `nan`, `inf`, or so far out the canvas cannot place it.
+              x.isFinite, y.isFinite, abs(x) < Self.limit, abs(y) < Self.limit else { return nil }
         self.init(x: x, y: y)
     }
 
     public var noteValue: String { "\(Position.plain(x)),\(Position.plain(y))" }
+
+    /// The farthest a position can be from the origin, in map points.
+    static let limit = 1e9
 
     static func plain(_ value: Double) -> String {
         value == value.rounded() && abs(value) < 1e15 ? String(Int(value)) : String(value)

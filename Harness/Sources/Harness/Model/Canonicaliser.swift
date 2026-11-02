@@ -15,12 +15,22 @@ public enum Canonicaliser {
         return words.joined(separator: " ")
     }
 
+    /// Words the same in the singular, and plurals the rules below would get wrong.
+    static let invariant: Set<String> = ["series", "species", "news", "means", "physics", "economics", "mathematics"]
+    static let ieWords: Set<String> = ["movie", "cookie", "zombie", "calorie", "selfie", "rookie", "brownie", "goalie", "pie", "tie", "lie"]
+    static let cheWords: Set<String> = ["cache", "niche", "ache", "headache", "avalanche", "moustache", "mustache"]
+
     /// A small singulariser: enough for the common cases, never clever.
     public static func singular(_ word: String) -> String {
         let w = word
-        if w.count <= 3 { return w }
-        if w.hasSuffix("ies") && w.count > 4 { return String(w.dropLast(3)) + "y" }
-        if w.hasSuffix("sses") || w.hasSuffix("shes") || w.hasSuffix("ches") || w.hasSuffix("xes") || w.hasSuffix("zes") {
+        if w.count <= 3 || invariant.contains(w) { return w }
+        if w.hasSuffix("ies") && w.count > 4 {
+            let ie = String(w.dropLast())
+            return ieWords.contains(ie) ? ie : String(w.dropLast(3)) + "y"
+        }
+        if w.hasSuffix("zzes") { return String(w.dropLast(2)) }
+        if w.hasSuffix("ches"), cheWords.contains(String(w.dropLast())) { return String(w.dropLast()) }
+        if w.hasSuffix("sses") || w.hasSuffix("shes") || w.hasSuffix("ches") || w.hasSuffix("xes") {
             return String(w.dropLast(2))
         }
         if w.hasSuffix("ss") || w.hasSuffix("us") || w.hasSuffix("is") || w.hasSuffix("ous") { return w }

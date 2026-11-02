@@ -167,7 +167,7 @@ public final class InMemoryStorage: MapStorage, @unchecked Sendable {
     public var iconManifest: Data?
 
     public init(log: String = "", evidence: String = "", context: String = "") {
-        self.log = log.split(separator: "\n").map(String.init)
+        self.log = log.split(whereSeparator: \.isNewline).map(String.init)
         self.evidence = evidence
         self.context = context
     }

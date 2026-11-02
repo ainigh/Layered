@@ -149,6 +149,8 @@ public struct LineAccumulator: Sendable {
 
     public mutating func feed(_ text: String) -> [String] {
         buffer += text
+        // `\r\n` (one Character) reads as a plain newline, even split across two chunks.
+        if buffer.contains("\r\n") { buffer = buffer.replacingOccurrences(of: "\r\n", with: "\n") }
         var lines: [String] = []
         while let newline = buffer.firstIndex(of: "\n") {
             lines.append(String(buffer[..<newline]))

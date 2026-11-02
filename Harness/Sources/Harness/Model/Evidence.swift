@@ -55,7 +55,7 @@ public struct EvidenceStore: Equatable, Sendable {
 
     public init(jsonl: String) throws {
         let decoder = JSONDecoder()
-        for line in jsonl.split(separator: "\n") where !line.trimmingCharacters(in: .whitespaces).isEmpty {
+        for line in jsonl.split(whereSeparator: \.isNewline) where !line.trimmingCharacters(in: .whitespaces).isEmpty {
             append(try decoder.decode(Sentence.self, from: Data(line.utf8)))
         }
     }
@@ -117,7 +117,7 @@ public struct EvidenceStore: Equatable, Sendable {
 public enum SentenceSplitter {
     public static func split(_ text: String) -> [String] {
         var out: [String] = []
-        for paragraph in text.components(separatedBy: "\n") {
+        for paragraph in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init) {
             var current = ""
             var previous: Character?
             for ch in paragraph {
@@ -140,7 +140,7 @@ public enum SentenceSplitter {
     public static func preview(_ text: String, limit: Int) -> String {
         var paragraphs: [String] = []
         var count = 0
-        for paragraph in text.components(separatedBy: "\n") {
+        for paragraph in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init) {
             let sentences = split(paragraph)
             guard !sentences.isEmpty else { continue }
             let room = limit - count

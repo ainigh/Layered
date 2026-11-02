@@ -7,9 +7,14 @@ public enum Export {
     /// Headings, nodes as bullets, edges as sub-bullets.
     public static func markdown(_ graph: Graph) -> String {
         var out: [String] = []
+        // Comments on a node are printed under it, not again at the heading.
+        let onNodes = Set(graph.comments.compactMap { c -> String? in
+            if case .node = c.attachedTo { return c.text }
+            return nil
+        })
         for item in Outline.build(graph) {
             if !item.title.isEmpty { out.append(String(repeating: "#", count: item.level) + " " + item.title) }
-            for comment in item.comments { out.append(comment) }
+            for comment in item.comments where !onNodes.contains(comment) { out.append(comment) }
             for name in item.nodes {
                 let id = NodeID(name: name)
                 let node = graph.nodes[id]!
@@ -18,8 +23,9 @@ public enum Export {
                 if let src = node.note(kind: "src"), src != "text" { line += " [\(src)]" }
                 out.append(line)
                 for comment in Outline.comments(attachedTo: name, in: graph) { out.append("  - _\(comment)_") }
-                for edge in graph.edges(touching: id) where edge.a == id || edge.isUndirected && edge.key.lo == id {
-                    let other = edge.a == id ? edge.b : edge.a
+                // Each link once, under the node it reads from (an arrow pointing back reads from its far end).
+                for edge in graph.edges(touching: id) where Canonical.emittingOrder(edge).0 == id {
+                    let other = Canonical.emittingOrder(edge).1
                     let arrow = edge.isUndirected ? "—" : (edge.isTwoWay ? "⇄" : "→")
                     let label = edge.labels.isEmpty ? "" : " " + edge.labels.joined(separator: ", ")
                     out.append("  - \(arrow)\(label) \(other.name)")

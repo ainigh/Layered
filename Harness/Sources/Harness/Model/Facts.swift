@@ -27,7 +27,7 @@ public struct Reading: Equatable, Sendable {
         guard let first = passage.first else { return [] }
         var out: [Reading] = []
         var last = first
-        for raw in output.split(separator: "\n") {
+        for raw in output.split(whereSeparator: \.isNewline) {
             let (number, rest) = Numbered.split(String(raw))
             if let number { last = passage.contains(number) ? number : last }
             let text = Text.collapse(rest)

@@ -51,7 +51,7 @@ public struct ContextParagraph: Equatable, Sendable, Codable {
         if let event { label.append(event.rawValue) }
         if let question { label.append("re: " + ContextParagraph.headerSafe(question)) }
         label.append(Turn.format(date))
-        let lines = body.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+        let lines = body.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map { line in
             ContextDocument.parseHeader(String(line)) == nil ? String(line) : " " + line
         }
         return "[\(label.joined(separator: " · "))]\n\(lines.joined(separator: "\n"))\n\n"
@@ -137,7 +137,7 @@ public struct ContextDocument: Equatable, Sendable {
             current = nil
             body = []
         }
-        for line in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
+        for line in markdown.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             if let header = ContextDocument.parseHeader(String(line)) {
                 close()
                 current = header

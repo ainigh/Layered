@@ -9,7 +9,8 @@ public enum Text {
 
     /// Splits a log into trimmed lines, keeping 1-based line numbers for errors.
     static func numberedLines(_ source: String) -> [(number: Int, text: String)] {
-        source.split(separator: "\n", omittingEmptySubsequences: false)
+        // `\r\n` is one Character, so lines are split on any newline, not on "\n" alone.
+        source.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
             .enumerated()
             .map { (number: $0.offset + 1, text: $0.element.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }

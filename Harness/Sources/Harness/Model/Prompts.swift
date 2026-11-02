@@ -15,12 +15,18 @@ public struct PromptSet: Equatable, Sendable {
     public func isDefault(_ kind: PromptKind) -> Bool { overrides[kind] == nil }
 
     /// Fills the template. `item` is the one thing the request is about.
+    /// One pass over the template, so a `{item}` in the user's own text is never filled in.
     public func render(_ kind: PromptKind, map: String, context: String, nodes: [String], item: String) -> String {
-        template(for: kind)
-            .replacingOccurrences(of: "{map}", with: map.isEmpty ? "(empty)" : map)
-            .replacingOccurrences(of: "{context}", with: context.isEmpty ? "(empty)" : context)
-            .replacingOccurrences(of: "{nodes}", with: nodes.isEmpty ? "(none)" : nodes.joined(separator: ", "))
-            .replacingOccurrences(of: "{item}", with: item)
+        let values = ["{map}": map.isEmpty ? "(empty)" : map, "{context}": context.isEmpty ? "(empty)" : context,
+                      "{nodes}": nodes.isEmpty ? "(none)" : nodes.joined(separator: ", "), "{item}": item]
+        var out = ""
+        var rest = Substring(template(for: kind))
+        while let r = rest.range(of: #"\{(map|context|nodes|item)\}"#, options: .regularExpression) {
+            out += rest[..<r.lowerBound]
+            out += values[String(rest[r])] ?? ""
+            rest = rest[r.upperBound...]
+        }
+        return out + rest
     }
 
     static let rules = """
@@ -290,7 +296,7 @@ public struct ClarifyQuestion: Equatable, Sendable, Codable {
 
     public static func parse(_ output: String, limit: Int = 5) -> [ClarifyQuestion] {
         var out: [ClarifyQuestion] = []
-        for raw in output.split(separator: "\n") {
+        for raw in output.split(whereSeparator: \.isNewline) {
             let line = Text.collapse(raw)
             guard line.hasPrefix("s"), let space = line.firstIndex(of: " "), let n = Int(line[line.index(after: line.startIndex)..<space]) else { continue }
             var rest = Text.collapse(line[space...])
@@ -316,7 +322,7 @@ public struct ChatReply: Equatable, Sendable {
         var prose: [String] = []
         var lines: [String] = []
         var inBlock = false
-        for raw in output.split(separator: "\n", omittingEmptySubsequences: false) {
+        for raw in output.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("```") {
                 inBlock = !inBlock && line.lowercased().hasPrefix("```mm")

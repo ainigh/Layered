@@ -12,7 +12,8 @@ public enum Grammar {
         let known = alternatives.isEmpty ? "" : alternatives.joined(separator: " | ") + " | "
         var lines: [String] = []
         lines.append("root  ::= line\(allowEmpty ? "*" : "+")")
-        let forms = (allowEdits ? "path | edit" : "path") + (allowComments ? " | comment" : "")
+        // Comments are lines of their own, never after `| ` (where any text would pass).
+        let forms = allowEdits ? "path | edit" : "path"
         lines.append("line  ::= (\"| \" (\(forms)) \"\\n\")\(allowComments ? " | (comment \"\\n\")" : "")")
         if allowComments { lines.append("comment ::= [^|\\n] [^\\n]*") }
         lines.append("path  ::= name (link name)* note? note?")

@@ -61,6 +61,7 @@ struct OverlayHeader<Trailing: View>: View {
                 .contentShape(Rectangle())
                 .keyboardShortcut(.cancelAction)
                 .help("Close (Esc)")
+                .accessibilityLabel("Close")
         }
         .padding(Theme.Space.m)
     }
@@ -135,20 +136,21 @@ struct ItemOverlay: View {
             } else {
                 Button { save(); session.askMe(about: item.id) } label: { Label("Ask me about this", systemImage: "questionmark.bubble") }
                     .disabled(session.running != nil)
-                if item.isPending || (draft != item.body && item.origin != .model) {
+                if item.isPending || (changed && item.origin != .model) {
                     Button { save(); session.submit(only: item.id) } label: { Label("Submit to the map", systemImage: "arrow.up.circle") }
-                        .disabled(session.running != nil || !item.selected)
+                        .disabled(session.running != nil || session.sentenceWalk != nil || !item.selected)
                         .help(item.selected ? "Extract this item now" : "Select it first: only items in the context go on the map")
                 }
                 Menu {
                     ContextItemMenu(session: session, item: item)
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("More actions for this item")
             }
             Spacer()
             if item.isEditable, !item.removed {
                 Button("Revert") { draft = item.body }.disabled(draft == item.body)
-                Button("Save") { save() }.buttonStyle(.borderedProminent).disabled(draft == item.body)
+                Button("Save") { save() }.buttonStyle(.borderedProminent).disabled(!changed)
             }
         }
         .controlSize(.small)
@@ -229,9 +231,15 @@ struct ItemOverlay: View {
         clarification = ""
     }
 
+    /// The draft differs in a way Save keeps (the harness trims, and ignores an empty text).
+    private var changed: Bool {
+        let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !t.isEmpty && t != item.body
+    }
+
     /// Keeps an edit as a new version of the item (nothing when unchanged).
     private func save() {
-        guard item.isEditable, draft != item.body else { return }
+        guard item.isEditable, changed else { return }
         session.dispatch(.reviseContext(item.id, draft))
     }
 
@@ -258,6 +266,7 @@ struct SpeakerNames: View {
                     Button("Set") {
                         if let name = names[label], !name.isEmpty { session.dispatch(.nameSpeaker(label: label, name: name)) }
                     }
+                    .disabled((names[label] ?? "").trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .controlSize(.small)
             }
@@ -275,6 +284,7 @@ struct ClarifyOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             OverlayHeader(symbol: "questionmark.bubble", title: "Ask me", subtitle: "Each answer joins the context as a clarification item.", close: { session.overlay = nil }) {
+                if session.running == .clarify { ProgressView().controlSize(.small) }
                 Toggle("Context only", isOn: $session.clarifyContextOnly).toggleStyle(.switch).controlSize(.small)
                     .help("Ask about the text alone, without the map")
                 Button("Ask again") { session.askMe() }.controlSize(.small).disabled(session.running != nil)
@@ -318,7 +328,10 @@ struct ClarifyOverlay: View {
     private func answer(_ i: Int, _ q: ClarifyQuestion) {
         guard let text = answers[i], !text.isEmpty else { return }
         session.dispatch(.answer(q, text))
-        answers = [:]
+        // Answers typed for the questions after this one move up with them.
+        var shifted: [Int: String] = [:]
+        for (k, v) in answers where k != i { shifted[k > i ? k - 1 : k] = v }
+        answers = shifted
         session.clarifyQuestions.remove(at: i)
     }
 }
@@ -468,7 +481,9 @@ struct AudioOverlay: View {
             switch job.step {
             case .failed(let message):
                 Text(message).font(Theme.caption).foregroundStyle(.red).textSelection(.enabled)
-                Button("Try again") { session.dropAudio(job.file, replacing: job.replacing) }.controlSize(.small)
+                if Self.kinds.contains(job.file.pathExtension.lowercased()) {
+                    Button("Try again") { session.dropAudio(job.file, replacing: job.replacing) }.controlSize(.small)
+                }
             case .done(let item):
                 HStack {
                     Text("Added to the context as item \(item), selected and ready to submit.").font(Theme.caption).foregroundStyle(.secondary)

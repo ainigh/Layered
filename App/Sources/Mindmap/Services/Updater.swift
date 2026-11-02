@@ -156,7 +156,7 @@ final class Updater {
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
                         self.state = .failed("Update failed: \(error.localizedDescription)")
-                        Notifier.post(title: "The update didn't install", body: "\(error.localizedDescription) The app you have is unchanged.")
+                        Notifier.post(title: "The update didn't install", body: "\(error.localizedDescription)\nThe app you have is unchanged.")
                     }
                 }
             }

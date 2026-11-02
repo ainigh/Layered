@@ -104,7 +104,7 @@ struct NoticeNote: View {
                 Button("Open") { session.notice = nil; session.open(item: id) }.controlSize(.small)
             }
             Button { session.notice = nil } label: { Image(systemName: "xmark") }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
+                .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss").accessibilityLabel("Dismiss")
         }
         .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.s).padding(.vertical, Theme.Space.xs)
         .floatingBar(in: Capsule())
@@ -128,7 +128,7 @@ struct ErrorNote: View {
             .frame(maxWidth: 420, alignment: .leading)
             if let retry { Button("Retry") { session.lastError = nil; retry() }.controlSize(.small).disabled(session.running != nil) }
             Button { session.lastError = nil } label: { Image(systemName: "xmark") }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
+                .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss").accessibilityLabel("Dismiss")
         }
         .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.s).padding(.vertical, Theme.Space.s)
         .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge))

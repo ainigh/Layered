@@ -27,7 +27,7 @@ enum Panel: String, CaseIterable, Identifiable {
 /// centre, the bar that adds text or audio (or records). The Context list floats over its left side and the details and other panels over its
 /// right, each opened from a pill in its top corner (as Notation opens from the bottom
 /// left), so the map never moves when a panel opens. A thin status bar below: what the model,
-/// a recording or a transcription is doing, and updates.
+/// a recording or a transcription is doing.
 /// Opening something over the map closes both sides until it closes.
 struct MainWindow: View {
     @Bindable var model: AppModel
@@ -91,6 +91,7 @@ struct ProjectChooser: View {
         }
         HStack(spacing: Theme.Space.s) {
             TextField("New project name", text: $name).textFieldStyle(.roundedBorder).onSubmit(create)
+                .onChange(of: name) { _, _ in problem = nil }
             Button("Create", action: create).buttonStyle(.borderedProminent)
                 .disabled(Workspace.folderName(name).isEmpty)
         }
@@ -159,7 +160,7 @@ struct WorkLine: View {
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
             Image(systemName: work.symbol).foregroundStyle(Theme.accent).frame(width: 16)
-            Text(work.text).lineLimit(1).truncationMode(.middle)
+            Text(work.text).lineLimit(1).truncationMode(.middle).help(work.text)
             if let f = work.fraction {
                 ProgressView(value: f).frame(width: 60).controlSize(.mini)
             } else if let since = work.since {
@@ -388,7 +389,7 @@ struct MapWindow: View {
                         if AudioOverlay.kinds.contains(url.pathExtension.lowercased()) {
                             session.dropAudio(url)
                             session.overlay = .audio
-                        } else if url.pathExtension == "mm", let text = try? String(contentsOf: url, encoding: .utf8) {
+                        } else if url.pathExtension.lowercased() == "mm", let text = try? String(contentsOf: url, encoding: .utf8) {
                             session.importMM(text)
                         } else if let text = try? String(contentsOf: url, encoding: .utf8) {
                             model.capture(text)
@@ -578,18 +579,18 @@ struct StatusBar: View {
                 Text("\(p) + \(run.responseTokens ?? 0) tokens")
             }
             let graph = session.state.graph
-            Text("\(graph.nodes.count) ideas · \(graph.edges.count) links")
+            Text("\(graph.nodes.count) idea\(graph.nodes.count == 1 ? "" : "s") · \(graph.edges.count) link\(graph.edges.count == 1 ? "" : "s")").monospacedDigit()
             Spacer(minLength: Theme.Space.s)
             if !session.pendingWrites.isEmpty {
-                Button { session.retryPendingWrites() } label: { Label("Folder unreachable: \(session.pendingWrites.count) lines kept in memory · Retry", systemImage: "exclamationmark.triangle.fill") }
+                Button { session.retryPendingWrites() } label: { Label("Folder unreachable: \(session.pendingWrites.count) line\(session.pendingWrites.count == 1 ? "" : "s") kept in memory · Retry", systemImage: "exclamationmark.triangle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.orange)
             }
             if let error = session.lastError {
                 HStack(spacing: Theme.Space.xs) {
                     Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.red)
-                    Text(error.message)
+                    Text(error.message).lineLimit(1).help(error.message)
                     Text(error.raw).font(Theme.caption.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary).frame(maxWidth: 260)
-                    if let retry = error.retry { Button("Retry", action: retry).controlSize(.small) }
+                    if let retry = error.retry { Button("Retry") { session.lastError = nil; retry() }.controlSize(.small).disabled(session.running != nil) }
                 }
             }
             if let recording = session.recording {
@@ -709,7 +710,6 @@ struct RecordingStatus: View {
     }
 }
 
-/// Updates, at the end of the status bar: check, install what was found, or what went wrong.
 /// Light, dark, or as the Mac is, in the status bar.
 struct AppearanceToggle: View {
     @AppStorage(Appearance.key) private var appearance: Appearance = .system
@@ -759,8 +759,7 @@ struct UpdateStatus: View {
                         Text(message)
                         Button("Try again") { updater.check(userInitiated: true) }
                         Button("Copy error report") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(Updater.report(message), forType: .string)
+                            Clipboard.copy(Updater.report(message))
                         }
                     } label: {
                         Label("Update failed", systemImage: "exclamationmark.triangle.fill")

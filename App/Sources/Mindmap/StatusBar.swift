@@ -4,8 +4,8 @@ import Observation
 
 /// The menu bar icon, made with AppKit's `NSStatusItem`. SwiftUI's `MenuBarExtra` drew an icon
 /// that ignored clicks on some Macs (as tool-mac-tool-run found; its AppKit icon works there).
-/// A click opens the window, or closes it when it is open; updates live in the window's status
-/// bar. A right-click (or ⌃-click) shows a short menu, built again each time it opens so it
+/// A click opens the window, or closes it when it is open; updates live at the top right of
+/// the window. A right-click (or ⌃-click) shows a short menu, built again each time it opens so it
 /// shows the current projects, and Quit.
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {

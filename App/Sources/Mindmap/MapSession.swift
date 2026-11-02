@@ -64,6 +64,10 @@ final class MapSession {
     private var audioFiles: [Int: URL] = [:]
     /// The recording being added; the next one waits for it.
     @ObservationIgnored private var audioQueue: Task<Void, Never>?
+    /// Expansions wait for each other: one request at a time, in the order asked.
+    @ObservationIgnored private var expandQueue: Task<Void, Never>?
+    /// Bumped by Stop, so expansions still waiting are dropped too.
+    @ObservationIgnored private var expandGeneration = 0
     var viewingTurn: Int?
     /// What is open over the map: a context item, Ask me's questions, or adding text or audio.
     var overlay: Overlay?
@@ -573,9 +577,13 @@ final class MapSession {
     /// an item and put on the map, while the recording goes on.
     func startRecording(live: Bool) {
         guard recording == nil, live || audioJob?.running != true else { return }
-        recording = Recording(live: live, started: Date(), status: "Waiting for the microphone…")
+        let asked = Recording(live: live, started: Date(), status: "Waiting for the microphone…")
+        recording = asked
         Task {
-            guard await LiveRecorder.permission() else {
+            let allowed = await LiveRecorder.permission()
+            // Stopped while macOS asked for the microphone: nothing to record.
+            guard recording?.id == asked.id else { return }
+            guard allowed else {
                 recording = nil
                 lastError = ("Turn it on in System Settings › Privacy & Security › Microphone.", "Mindmap can't use the microphone", nil)
                 return
@@ -600,7 +608,9 @@ final class MapSession {
     /// download, a piece being transcribed, the model) is let go, what is not on the map yet
     /// stays in the recording, and the recording is kept as it is.
     func stopRecording() {
-        guard let recorder, let rec = recording, !rec.cancelled else { return }
+        guard let rec = recording, !rec.cancelled else { return }
+        // Still waiting for the microphone: nothing was recorded, so it simply ends.
+        guard let recorder else { recording = nil; return }
         if rec.stopping {
             guard rec.live else { return }
             recording?.cancelled = true
@@ -921,8 +931,18 @@ final class MapSession {
         }
     }
 
+    /// Expands a node. Several asked at once (a selection) go one after another, never
+    /// together, so Stop stops them all and the buttons stay off until the last is done.
     func expand(_ name: String) {
-        Task { await run(.expand, item: ModelRunner.neighbourhood(of: name, in: state.graph), about: name) }
+        let previous = expandQueue
+        let generation = expandGeneration
+        expandQueue = Task {
+            await previous?.value
+            // Another request under way: wait for it, unless Stop was pressed meanwhile.
+            while running != nil, generation == expandGeneration { try? await Task.sleep(for: .milliseconds(300)) }
+            guard generation == expandGeneration, state.graph.node(name) != nil else { return }
+            await run(.expand, item: ModelRunner.neighbourhood(of: name, in: state.graph), about: name)
+        }
     }
 
     /// Asks the model, reading the selected context. Lines it writes go on the map; prose it
@@ -991,6 +1011,7 @@ final class MapSession {
     func stop() {
         cancelRun?()
         cancelRun = nil
+        expandGeneration += 1
         sentenceWalk?.paused = true
     }
 
@@ -1022,7 +1043,11 @@ final class MapSession {
     enum ExportFormat: String, CaseIterable { case mm = "Canonical .mm", markdown = "Markdown outline", json = "JSON graph", svg = "SVG" }
 
     func importMM(_ text: String) {
-        if let lines = try? Import.lines(fromMM: text) { dispatch(.applyLines(lines, what: "import")) }
+        do {
+            dispatch(.applyLines(try Import.lines(fromMM: text), what: "import"))
+        } catch {
+            lastError = ("\(error)", "The .mm file could not be imported", nil)
+        }
     }
 }
 

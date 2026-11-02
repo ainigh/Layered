@@ -86,7 +86,7 @@ struct ContextRow: View {
                 HStack(spacing: Theme.Space.xs) {
                     Image(systemName: style.symbol).font(Theme.caption).foregroundStyle(style.color)
                     Text(style.title).font(Theme.label).foregroundStyle(item.origin == .model ? style.color : .primary)
-                    Text(item.added.formatted(date: .omitted, time: .shortened)).font(Theme.caption).foregroundStyle(.tertiary)
+                    Text(Calendar.current.isDateInToday(item.added) ? item.added.formatted(date: .omitted, time: .shortened) : item.added.formatted(date: .abbreviated, time: .shortened)).font(Theme.caption).foregroundStyle(.tertiary)
                     if item.edited != nil { Text("edited").font(Theme.caption).foregroundStyle(.tertiary) }
                     if item.isPending { Pill(text: item.lastExtracted == nil ? "not on map" : "changed", tint: Theme.accent) }
                     Spacer(minLength: 0)
@@ -149,7 +149,7 @@ struct ContextItemMenu: View {
         } else {
             Button("Open") { session.open(item: item.id) }
             Button(item.selected ? "Deselect" : "Select") { session.dispatch(.selectContext(item.id, !item.selected)) }
-            if item.kind != .model, !item.isOnMap { Button("Send to the map") { session.send(item: item.id) }.disabled(session.running != nil) }
+            if item.kind != .model, !item.isOnMap { Button("Send to the map") { session.send(item: item.id) }.disabled(session.running != nil || session.sentenceWalk != nil) }
             Button("Ask me about this") { session.askMe(about: item.id) }.disabled(session.running != nil)
             Divider()
             Button("Select its ideas on the map") { session.overlay = nil; session.selectIdeas(of: item) }
@@ -218,6 +218,9 @@ struct OutlinePanel: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    if session.state.graph.nodes.isEmpty {
+                        Text("No ideas on the map yet. Send an item from Context and its outline shows here.").font(Theme.caption).foregroundStyle(.secondary)
+                    }
                     ForEach(Array(Outline.build(session.state.graph).enumerated()), id: \.offset) { _, item in
                         if !item.title.isEmpty {
                             HStack {
@@ -225,6 +228,7 @@ struct OutlinePanel: View {
                                     if let i = session.ui.collapsedHeadings.firstIndex(of: item.title) { session.ui.collapsedHeadings.remove(at: i) } else { session.ui.collapsedHeadings.append(item.title) }
                                     session.saveUI()
                                 } label: { Image(systemName: session.ui.collapsedHeadings.contains(item.title) ? "chevron.right" : "chevron.down") }.buttonStyle(.plain)
+                                    .help(session.ui.collapsedHeadings.contains(item.title) ? "Show \(item.title)" : "Hide \(item.title)")
                                 Text(item.title).font(Theme.label).textSelection(.enabled)
                             }
                             .padding(.leading, CGFloat(item.level - 1) * Theme.Space.m)

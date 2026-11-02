@@ -20,8 +20,9 @@ struct PromptPanel: View {
                     problem = session.validatePrompt(kind, text)
                     if problem == nil { session.savePrompt(kind, text == PromptSet.defaultTemplate(for: kind) ? nil : text) }
                 }
+                .disabled(text == session.prompts.template(for: kind))
                 Button("Reset to default") { text = PromptSet.defaultTemplate(for: kind); session.savePrompt(kind, nil); problem = nil }
-                    .disabled(session.prompts.isDefault(kind))
+                    .disabled(session.prompts.isDefault(kind) && text == PromptSet.defaultTemplate(for: kind))
                 Spacer()
                 Text(session.prompts.isDefault(kind) ? "default" : "edited").font(Theme.caption).foregroundStyle(.secondary)
             }
@@ -104,7 +105,8 @@ struct SettingsPanel: View {
             }
             Section("Appearance") {
                 ThemePicker()
-                TextField("Global capture shortcut", text: $session.settings.globalShortcut).onSubmit(save)
+                LabeledContent("Global capture shortcut", value: "⌃⌥⌘M")
+                    .help("Sends the text selected in any app to Context")
                 Toggle("Optimize every n turns", isOn: Binding(get: { session.settings.optimizeEveryTurns != nil }, set: { session.settings.optimizeEveryTurns = $0 ? 50 : nil; save() }))
                 if session.settings.optimizeEveryTurns != nil {
                     Stepper("Every \(session.settings.optimizeEveryTurns ?? 50) turns", value: Binding(get: { session.settings.optimizeEveryTurns ?? 50 }, set: { session.settings.optimizeEveryTurns = $0; save() }), in: 5...500, step: 5)
@@ -114,6 +116,8 @@ struct SettingsPanel: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .task { await loadModels() }
+        // Host, context size and whisper model are kept as typed, not only on Return.
+        .onDisappear(perform: save)
     }
 
     private func save() { session.saveSettings() }
@@ -124,7 +128,7 @@ struct SettingsPanel: View {
         do {
             models = try await session.ollama.models()
             reachable = true
-            connection = models.isEmpty ? "Connected, but no models are installed: run `ollama pull <model>`." : "Connected to \(host) · \(models.count) models"
+            connection = models.isEmpty ? "Connected, but no models are installed: run `ollama pull <model>`." : "Connected to \(host) · \(models.count) model\(models.count == 1 ? "" : "s")"
         } catch {
             models = []
             reachable = false
@@ -163,10 +167,10 @@ struct HistoryPanel: View {
                             Text("\(turn.number)").font(Theme.label).frame(width: 32, alignment: .trailing)
                             VStack(alignment: .leading) {
                                 Text("\(turn.who) · \(turn.what)").font(Theme.body)
-                                Text("\(turn.lines.count) lines · \(turn.date.formatted(date: .omitted, time: .shortened))").font(Theme.caption).foregroundStyle(.secondary)
+                                Text("\(turn.lines.count) line\(turn.lines.count == 1 ? "" : "s") · \(turn.date.formatted(date: .omitted, time: .shortened))").font(Theme.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button("View") { session.viewingTurn = turn.number }.font(Theme.caption)
+                            Button("View") { session.viewingTurn = turn.number == session.state.turns.last?.number ? nil : turn.number }.font(Theme.caption)
                             if !session.isDemo { Button("Branch from here") { session.branch(atTurn: turn.number) }.font(Theme.caption) }
                         }
                         .padding(Theme.Space.xs)

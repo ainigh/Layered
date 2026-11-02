@@ -16,8 +16,13 @@ struct MindmapApp: App {
         }
         .commands {
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo") { model.session?.dispatch(.undo) }.keyboardShortcut("z", modifiers: .command)
-                Button("Redo") { model.session?.dispatch(.redo) }.keyboardShortcut("z", modifiers: [.command, .shift])
+                // Typing in a text box, ⌘Z undoes the typing, not a turn of the map.
+                Button("Undo") {
+                    if NSApp.keyWindow?.firstResponder is NSText { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) } else { model.session?.dispatch(.undo) }
+                }.keyboardShortcut("z", modifiers: .command)
+                Button("Redo") {
+                    if NSApp.keyWindow?.firstResponder is NSText { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) } else { model.session?.dispatch(.redo) }
+                }.keyboardShortcut("z", modifiers: [.command, .shift])
             }
             CommandMenu("Map") {
                 Button("New project from clipboard") { model.newFromClipboard() }.keyboardShortcut("n", modifiers: [.command, .shift])
@@ -191,6 +196,7 @@ final class AppModel {
                 // One floating panel at a time: the other side and the drawer close.
                 shownPanels = [edge: lastShown[edge].flatMap { docked.contains($0) ? $0 : nil } ?? docked.first ?? .context]
                 notationOpen = false
+                logOpen = false
             }
         }
     }
@@ -305,7 +311,8 @@ final class AppModel {
         let alert = NSAlert()
         alert.messageText = working.count == 1 ? "\(working[0].title) is still working" : "\(working.count) projects are still working"
         alert.informativeText = working.map { "\($0.title): " + $0.work.map(\.text).joined(separator: ", ") }.joined(separator: "\n")
-            + "\n\nQuitting stops it. Close the window instead and it carries on from the menu bar."
+            + (working.count == 1 ? "\n\nQuitting stops it. Close the window instead and it carries on from the menu bar."
+                                  : "\n\nQuitting stops them. Close the window instead and they carry on from the menu bar.")
         alert.addButton(withTitle: "Keep Working")
         alert.addButton(withTitle: "Quit Anyway")
         return alert.runModal() == .alertSecondButtonReturn
@@ -314,7 +321,8 @@ final class AppModel {
     /// Opens a project and remembers it for next time.
     func open(_ project: Workspace.Project) {
         open(project.url)
-        if session != nil { UserDefaults.standard.set(project.name, forKey: WorkspaceStore.lastProject) }
+        // Only what opened: a project that failed to open is not tried again at the next launch.
+        if session?.folder?.lastPathComponent == project.url.lastPathComponent { UserDefaults.standard.set(project.name, forKey: WorkspaceStore.lastProject) }
     }
 
     /// The window shows the projects to pick from (or make).
@@ -360,7 +368,7 @@ final class AppModel {
     /// The clipboard as the first item of a new project.
     func newFromClipboard() {
         guard let text = NSPasteboard.general.string(forType: .string), let workspace else { showProjects(); return }
-        let stamp = Date().formatted(.dateTime.year().month().day().hour().minute()).replacingOccurrences(of: "/", with: "-")
+        let stamp = Date().formatted(.dateTime.year().month().day().hour().minute().second()).replacingOccurrences(of: "/", with: "-")
         guard let project = try? workspace.create("Clipboard \(stamp)") else { showProjects(); return }
         open(project)
         capture(text)
@@ -378,14 +386,16 @@ final class AppModel {
         let (data, ext) = session.export(format)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(session.title).\(ext)"
-        if panel.runModal() == .OK, let url = panel.url { try? data.write(to: url) }
+        if panel.runModal() == .OK, let url = panel.url {
+            do { try data.write(to: url) } catch { NSAlert(error: error).runModal() }
+        }
     }
 
     func importMM() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.plainText, .text]
         if panel.runModal() == .OK, let url = panel.url, let text = try? String(contentsOf: url, encoding: .utf8) {
-            if url.pathExtension == "mm" { session?.importMM(text) } else { capture(text) }
+            if url.pathExtension.lowercased() == "mm" { session?.importMM(text) } else { capture(text) }
         }
     }
 }

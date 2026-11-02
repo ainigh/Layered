@@ -16,12 +16,14 @@ struct DetailsPanel: View {
                 if names.count == 1, let node = graph.node(names[0]) {
                     NodeDetails(session: session, node: node)
                 } else if names.count > 1 {
-                    HStack { ForEach(names, id: \.self) { NodeChip(name: $0, graph: graph) } }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack { ForEach(names, id: \.self) { NodeChip(name: $0, graph: graph) } }.padding(.vertical, 1)
+                    }
                     ProofList(session: session, entries: Proof.entries(for: names, in: session.state), empty: "None of these has proof sentences.")
                 } else if let key = session.selectedEdge, let edge = graph.edges[key] {
                     EdgeDetails(session: session, edge: edge)
                 } else {
-                    Text("Click a node to see what it is and where it came from.").font(Theme.body).foregroundStyle(.secondary)
+                    Text("Click a node or a link to see what it is and where it came from.").font(Theme.body).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -57,7 +59,7 @@ struct NodeDetails: View {
                 if let kind { Pill(text: kind, tint: Theme.kind(kind)) }
                 Pill(text: Provenance.title(src), tint: Provenance.tint(src))
                 if node.note(kind: "pos") != nil { Pill(text: "pinned") }
-                Pill(text: "\(graph.degree(of: node.id)) links")
+                Pill(text: graph.degree(of: node.id) == 1 ? "1 link" : "\(graph.degree(of: node.id)) links")
             }
 
             ProofList(session: session, entries: Proof.entries(for: [name], in: session.state), empty: Provenance.noProof(src))
@@ -146,7 +148,9 @@ struct ProofList: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     source(entry.sentence)
                     if entry.nodes.count > 1 {
-                        HStack { ForEach(entry.nodes, id: \.self) { NodeChip(name: $0, graph: session.state.graph) } }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack { ForEach(entry.nodes, id: \.self) { NodeChip(name: $0, graph: session.state.graph) } }.padding(.vertical, 1)
+                        }
                     }
                 }
                 .padding(.leading, Theme.Space.s)

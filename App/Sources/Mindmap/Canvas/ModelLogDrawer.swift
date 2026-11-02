@@ -183,7 +183,7 @@ private struct ExchangeRow: View {
                 .padding(.horizontal, 6).padding(.vertical, 1)
                 .background(Theme.accent.opacity(0.15), in: Capsule())
                 .foregroundStyle(Theme.accent)
-            Text(exchange.about).font(Theme.caption).lineLimit(1).truncationMode(.middle)
+            Text(exchange.about).font(Theme.caption).lineLimit(1).truncationMode(.middle).help(exchange.about)
             if exchange.round > 1 { Text("request \(exchange.round)").font(Theme.caption).foregroundStyle(.secondary) }
             Spacer(minLength: Theme.Space.s)
             status
@@ -203,7 +203,7 @@ private struct ExchangeRow: View {
                 Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
             }
         case .stopped: Label("Stopped", systemImage: "stop.circle").font(Theme.caption).foregroundStyle(.secondary)
-        case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        case .failed(let message): Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).help(message)
         }
     }
 

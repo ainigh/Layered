@@ -45,3 +45,9 @@ These are decisions the spec left open or that did not survive contact with the 
 - **A model reply is never proof.** Its text is in the evidence store so it can be read when selected, but the gate checks against `proofEvidence`, which leaves replies out, and coverage does not count them.
 - **Open and boxed nodes.** `MapLayout` sizes `src text`/`user` nodes (and nodes with no `src`) as an icon above the name, and places edge ends beside the icon (`anchorY`, `anchorInset`); `world`, `guess` and `advice` are cards.
 - **Transcription reports steps** (`TranscriptionStep`: downloading the model, decoding, transcribing), not a bare fraction, so the app can say what it is waiting on.
+- **Folds are a layout input, not notation.** `MapLayout.compute(collapsed:)` leaves out what hangs under a folded node in its tree (the outermost fold wins) with every link touching it; branch colours are numbered before folding. The folded names live in `ui.json` (`collapsed`), like other canvas state.
+- **Moving between layouts** (`MapLayout.morphed(from:t:)`) interpolates node centres and re-routes links; a node the old layout lacked starts at its nearest ancestor's old centre. The app eases `t`.
+- **Settings files are read leniently.** `UIState`, `PanelPlacement`, `Settings`, `ModelSettings` and `LayoutOptions` take a default for any key that is missing or of the wrong type, so a file from another build never keeps a project from opening.
+- **Comments must be deletable.** A comment is undone with `| text =`, so a comment whose text that line could not carry is written with look-alikes (– ＝ ＠ ｜).
+- **Canonical headings.** A link is listed under whichever end's heading comes later, and an end with no line of its own in its heading's section gets a bare one, so Optimize never moves a node to another heading.
+- **`@turn` lines come only from the app.** One in imported text is held back: it would read as a turn of its own on reload.

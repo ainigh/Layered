@@ -209,10 +209,11 @@ public struct ModelRunner: Sendable {
 
     /// Dedupe's input: every root node with its notes and degree.
     public static func nodeList(_ graph: Graph) -> String {
-        graph.rootNames.map { name in
+        let links = graph.edgesByNode()
+        return graph.rootNames.map { name in
             let id = NodeID(name: name)
             let notes = graph.nodes[id]?.notes.joined(separator: ", ") ?? ""
-            return "\(name) (\(notes.isEmpty ? "no notes" : notes); degree \(graph.degree(of: id)))"
+            return "\(name) (\(notes.isEmpty ? "no notes" : notes); degree \(links[id]?.count ?? 0))"
         }.joined(separator: "\n")
     }
 }

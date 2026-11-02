@@ -406,7 +406,8 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
         state.appendTurn(who: "user", what: "merge \(proposal.old)", lines: lines, now: now)
 
     case .forgetText(let n):
-        let doomed = state.graph.nodes.keys.filter { $0.scope.isEmpty && Coverage.supports(of: $0, in: state.graph) == [n] }.sorted()
+        let supports = Coverage.supportsAll(in: state.graph)
+        let doomed = state.graph.nodes.keys.filter { $0.scope.isEmpty && supports[$0] == [n] }.sorted()
         guard !doomed.isEmpty else { break }
         state.appendTurn(who: "user", what: "forget text \(n)", lines: doomed.map { "| \($0.name) =" }, now: now)
     }

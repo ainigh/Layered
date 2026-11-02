@@ -163,4 +163,18 @@ final class AuditTests: XCTestCase {
         XCTAssertTrue(folded.contains(">+2</text>"), "a fold says how many it hides")
         XCTAssertFalse(folded.contains(">c</text>"))
     }
+
+    func testUndoOnALargeMapIsQuickAndLinksIndexAgrees() throws {
+        let lines = (0..<3000).map { "| n\($0) - next | n\($0 + 1)" }
+        var s = reduce(MapState(), .applyLines(lines, what: "big"), now: fixedDate)
+        s = reduce(s, .applyLines(["| n5 @todo check"], what: "note"), now: fixedDate)
+        let start = Date()
+        s = reduce(s, .undo, now: fixedDate)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        XCTAssertNil(s.graph.node("n5")?.note(kind: "todo"))
+        let index = s.graph.edgesByNode()
+        for name in ["n0", "n5", "n3000"] {
+            XCTAssertEqual(index[NodeID(name: name)]?.map(\.key), s.graph.edges(touching: NodeID(name: name)).map(\.key), name)
+        }
+    }
 }

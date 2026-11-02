@@ -12,6 +12,7 @@ public enum Export {
             if case .node = c.attachedTo { return c.text }
             return nil
         })
+        let links = graph.edgesByNode()
         for item in Outline.build(graph) {
             if !item.title.isEmpty { out.append(String(repeating: "#", count: item.level) + " " + item.title) }
             for comment in item.comments where !onNodes.contains(comment) { out.append(comment) }
@@ -24,7 +25,7 @@ public enum Export {
                 out.append(line)
                 for comment in Outline.comments(attachedTo: name, in: graph) { out.append("  - _\(comment)_") }
                 // Each link once, under the node it reads from (an arrow pointing back reads from its far end).
-                for edge in graph.edges(touching: id) where Canonical.emittingOrder(edge).0 == id {
+                for edge in links[id] ?? [] where Canonical.emittingOrder(edge).0 == id {
                     let other = Canonical.emittingOrder(edge).1
                     let arrow = edge.isUndirected ? "—" : (edge.isTwoWay ? "⇄" : "→")
                     let label = edge.labels.isEmpty ? "" : " " + edge.labels.joined(separator: ", ")

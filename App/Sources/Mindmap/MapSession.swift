@@ -824,7 +824,8 @@ final class MapSession {
     /// Selects the nodes an item's texts support.
     func selectIdeas(of item: ContextItem) {
         let texts = Set(item.textIDs)
-        selection = Set(state.graph.nodes.keys.filter { !Coverage.supports(of: $0, in: state.graph).isDisjoint(with: texts) }.map(\.name))
+        let supports = Coverage.supportsAll(in: state.graph)
+        selection = Set(state.graph.nodes.keys.filter { !(supports[$0] ?? []).isDisjoint(with: texts) }.map(\.name))
     }
 
     /// Forgets the ideas whose only support is this item (each of its versions).

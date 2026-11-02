@@ -24,13 +24,14 @@ public enum Transition {
         let fromNodes = Set(from.nodes.keys), toNodes = Set(to.nodes.keys)
 
         var rebuilt = Set<NodeID>()
+        let fromLinks = from.edgesByNode(), toLinks = to.edgesByNode()
         for id in fromNodes.intersection(toNodes) {
             let before = from.nodes[id]!, after = to.nodes[id]!
             if !before.notes.allSatisfy({ note in
                 if let kind = NoteKind.split(note)?.kind, to.singleValuedNoteKinds.contains(kind) { return after.note(kind: kind) != nil }
                 return after.notes.contains(note)
             }) { rebuilt.insert(id); continue }
-            for edge in from.edges(touching: id) {
+            for edge in fromLinks[id] ?? [] {
                 guard let other = to.edges[edge.key], other.labels.allSatisfy(other.labels.contains),
                       Set(edge.labels).isSubset(of: other.labels), Set(edge.notes).isSubset(of: other.notes),
                       directionSubset(edge, of: other) else { rebuilt.insert(id); break }
@@ -61,7 +62,7 @@ public enum Transition {
             let node = to.nodes[id]!
             let fresh = !fromNodes.contains(id) || rebuilt.contains(id)
             let notes = fresh ? node.notes : node.notes.filter { !(from.nodes[id]!.notes.contains($0)) }
-            if fresh && notes.isEmpty && to.degree(of: id) == 0 { lines.append("| \(id.name)") }
+            if fresh && notes.isEmpty && (toLinks[id] ?? []).isEmpty { lines.append("| \(id.name)") }
             for note in notes { lines.append("| \(id.name) @\(note)") }
         }
         for edge in to.edges.values.sorted(by: { $0.key < $1.key }) {
@@ -132,9 +133,21 @@ public struct Coverage: Equatable, Sendable {
 
     /// Text ids that support a node: its own proof notes plus those on its edges.
     public static func supports(of id: NodeID, in graph: Graph) -> Set<Int> {
+        supports(of: id, in: graph, links: graph.edges(touching: id))
+    }
+
+    /// Every node's supporting texts at once (linear in the map's size).
+    public static func supportsAll(in graph: Graph) -> [NodeID: Set<Int>] {
+        let links = graph.edgesByNode()
+        var out: [NodeID: Set<Int>] = [:]
+        for id in graph.nodes.keys { out[id] = supports(of: id, in: graph, links: links[id] ?? []) }
+        return out
+    }
+
+    private static func supports(of id: NodeID, in graph: Graph, links: [Edge]) -> Set<Int> {
         var texts = Set<Int>()
         for note in graph.nodes[id]?.notes ?? [] { if let p = proof(note) { texts.insert(p.text) } }
-        for edge in graph.edges(touching: id) { for note in edge.notes { if let p = proof(note) { texts.insert(p.text) } } }
+        for edge in links { for note in edge.notes { if let p = proof(note) { texts.insert(p.text) } } }
         return texts
     }
 }

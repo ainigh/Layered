@@ -165,6 +165,17 @@ public struct Graph: Equatable, Sendable {
 
     public func degree(of id: NodeID) -> Int { edges(touching: id).count }
 
+    /// Every node's links, found in one pass and sorted as `edges(touching:)` sorts them:
+    /// for work over every node, which would otherwise scan all links once per node.
+    public func edgesByNode() -> [NodeID: [Edge]] {
+        var out: [NodeID: [Edge]] = [:]
+        for e in edges.values.sorted(by: { $0.key < $1.key }) {
+            out[e.a, default: []].append(e)
+            if e.b != e.a { out[e.b, default: []].append(e) }
+        }
+        return out
+    }
+
     /// Node names in the root scope, sorted. This is the node list sent to the model.
     public var rootNames: [String] {
         nodes.keys.filter { $0.scope.isEmpty }.map(\.name).sorted()

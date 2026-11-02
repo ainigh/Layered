@@ -65,7 +65,8 @@ struct CanvasView: View {
     /// Find on the map: the bar is open, what it looks for, and which match is current.
     @State private var finding = false
     @State private var findText = ""
-    @State private var findIndex = 0
+    /// The current match, by name, so a fold opening or the model adding a match never shifts it.
+    @State private var findCurrent: String?
     /// The overview in the bottom right, while some of the map is out of view.
     @AppStorage("map.minimap") private var minimapOn = true
     /// Redraws while a new node's glow fades (only then: see `onReceive`).
@@ -79,7 +80,8 @@ struct CanvasView: View {
         let _ = session.review
         let layout = draggingNode.map { base.moving($0.name, dx: $0.offset.width / view.k, dy: $0.offset.height / view.k) } ?? base
         let found = finding ? live.search(findText, in: graph) : []
-        let current = found.isEmpty ? nil : found[min(findIndex, found.count - 1)]
+        let current = findCurrent.flatMap { found.contains($0) ? $0 : nil } ?? found.first
+        let findIndex = current.flatMap { found.firstIndex(of: $0) } ?? 0
 
         GeometryReader { geo in
             ZStack {
@@ -112,7 +114,7 @@ struct CanvasView: View {
                 }
                 .focusable()
                 .focusEffectDisabled()
-                .onKeyPress(phases: .down) { press in key(press) ? .handled : .ignored }
+                .onKeyPress(phases: [.down, .repeat]) { press in key(press) ? .handled : .ignored }
 
                 if let hovered, draggingNode == nil, linkDrag == nil, let p = layout[hovered], let node = graph.nodes[NodeID(name: hovered)] {
                     let top = view.screen(MapLayout.Point(x: p.x + p.w / 2, y: p.y))
@@ -139,8 +141,8 @@ struct CanvasView: View {
                 VStack(spacing: Theme.Space.s) {
                     Spacer()
                     if finding {
-                        FindBar(text: $findText, count: found.count, index: min(findIndex, max(0, found.count - 1)),
-                                step: { stepFind($0, found) }, close: closeFind)
+                        FindBar(text: $findText, count: found.count, index: findIndex, focusToken: session.findRequests,
+                                step: { stepFind($0, from: current, in: found) }, close: closeFind)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     if let turn = session.viewingTurn {
@@ -190,16 +192,18 @@ struct CanvasView: View {
             .onChange(of: geo.size) { _, s in size = s; if !touched { fit(layout: base, animate: false) } }
             .onChange(of: live) { old, next in
                 // The map changed under a spread: what it was arranging is gone.
+                // What was on screen: a spread under way, or the old layout (or a glide toward it).
+                let wasShown = spreading
                 if next != spreadFrom { finishSpread(commit: false) }
-                startMorph(from: morphFrom ?? onScreen(old), to: next)
+                startMorph(from: morphFrom ?? wasShown ?? onScreen(old), to: next)
                 morphFrom = nil
                 if !touched { fit(layout: next, animate: true) }
             }
             .onChange(of: session.findRequests) { _, _ in openFind() }
             .onChange(of: session.focusRequests) { _, _ in if let name = session.focused { bringIntoView(name) } }
             .onChange(of: findText) { _, _ in
-                findIndex = 0
-                if let first = live.search(findText, in: graph).first { show(found: first) }
+                findCurrent = live.search(findText, in: graph).first
+                if let first = findCurrent { show(found: first) }
             }
             .onDisappear { finishSpread(commit: false) }
             .onChange(of: session.viewingTurn) { _, _ in touched = false; fit(layout: session.displayedLayout, animate: true) }
@@ -321,10 +325,19 @@ struct CanvasView: View {
     /// The map glides from what was on screen to its new layout: nodes slide to their new
     /// places, new ones grow out of their parents and fade in.
     private func startMorph(from old: MapLayout, to next: MapLayout) {
-        guard !reduceMotion, spreading == nil, next.nodes.count <= Morph.maxNodes, old != next else { morph = nil; return }
+        guard !reduceMotion, spreading == nil, draggingNode == nil, next.nodes.count <= Morph.maxNodes, old != next else { morph = nil; return }
         let m = Morph(from: old, arrivals: next.arrivals(since: old), start: Date())
         morph = m
         DispatchQueue.main.asyncAfter(deadline: .now() + Morph.duration + 0.05) { if morph == m { morph = nil } }
+    }
+
+    /// Deletes nodes in one turn, so one ⌘Z brings them all back.
+    private func deleteNodes(_ names: [String]) {
+        guard !names.isEmpty else { return }
+        if names.count == 1 { session.dispatch(.delete(names[0])) } else {
+            session.dispatch(.applyLines(names.map { "| \($0) =" }, what: "delete \(names.count) nodes"))
+        }
+        session.selection = []
     }
 
     // MARK: - Find on the map
@@ -336,14 +349,16 @@ struct CanvasView: View {
     private func closeFind() {
         withAnimation(Theme.slide) { finding = false }
         findText = ""
-        findIndex = 0
+        findCurrent = nil
     }
 
     /// The next match (`by` 1) or the one before (−1), wrapping round.
-    private func stepFind(_ by: Int, _ found: [String]) {
+    private func stepFind(_ by: Int, from current: String?, in found: [String]) {
         guard !found.isEmpty else { return }
-        findIndex = ((min(findIndex, found.count - 1) + by) % found.count + found.count) % found.count
-        show(found: found[findIndex])
+        let at = current.flatMap { found.firstIndex(of: $0) } ?? 0
+        let name = found[((at + by) % found.count + found.count) % found.count]
+        findCurrent = name
+        show(found: name)
     }
 
     /// A match selected and in view, its fold opened if one hides it.
@@ -375,6 +390,7 @@ struct CanvasView: View {
         spreadTask = Task { @MainActor in
             var spread = first
             // The fresh arrangement first, for a moment, then the spread from there.
+            guard !Task.isCancelled else { return }
             spreading = start
             fit(layout: start, animate: true)
             try? await Task.sleep(for: .milliseconds(450))
@@ -444,6 +460,11 @@ struct CanvasView: View {
         guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return false }
         let one = session.selection.count == 1 ? session.selection.first : nil
         let live = session.viewingTurn == nil
+        // Held down, only moving and zooming repeat; toggles and actions happen once.
+        if press.phase == .repeat {
+            let repeats: [KeyEquivalent] = [.leftArrow, .rightArrow, .upArrow, .downArrow]
+            guard repeats.contains(press.key) || ["+", "=", "-", "_"].contains(press.characters) else { return true }
+        }
         switch press.characters {
         case "+", "=": zoom(by: Theme.Map.zoomStep); return true
         case "-", "_": zoom(by: 1 / Theme.Map.zoomStep); return true
@@ -478,12 +499,12 @@ struct CanvasView: View {
             return true
         case .delete, .deleteForward:
             guard live, !session.selection.isEmpty else { return false }
-            for name in session.selection.sorted() { session.dispatch(.delete(name)) }
+            deleteNodes(session.selection.sorted())
             session.selection = []
             return true
         default: break
         }
-        if let one, !press.modifiers.contains(.shift) {
+        if let one, !press.modifiers.contains(.shift), session.displayedLayout[one] != nil {
             let direction: MapLayout.Direction?
             switch press.key {
             case .leftArrow: direction = .left
@@ -569,7 +590,7 @@ struct CanvasView: View {
         }
         // Labels last, so no curve runs through them; too small to read, they are left out.
         if detail == .full {
-            for e in layout.edges where (!e.label.isEmpty || !e.note.isEmpty) && seen.contains(CGPoint(e.labelAt)) {
+            for e in layout.edges where (!e.label.isEmpty || !e.note.isEmpty) && seen.insetBy(dx: -MapLayout.Metrics.maxColumnGap / 2, dy: 0).contains(CGPoint(e.labelAt)) {
                 var layer = world
                 layer.opacity = marks.opacity(e.key.lo.name, e.key.hi.name)
                 drawLabel(e, in: &layer)
@@ -627,7 +648,7 @@ struct CanvasView: View {
         let src = node.note(kind: "src")
         let selected = session.selection.contains(p.id.name)
         // What just arrived glows, fading over a few seconds.
-        let age = session.highlighted[p.id.name].map { now.timeIntervalSince($0) } ?? .infinity
+        let age = session.highlighted[p.id.name].map { max(0, now.timeIntervalSince($0)) } ?? .infinity
 
         if src == "guess" { ctx.opacity *= Theme.provenance(src).opacity }
         if age < Theme.highlightSeconds {
@@ -678,7 +699,7 @@ struct CanvasView: View {
     private func drawOverviewNames(graph: Graph, layout: MapLayout, marks: Marks, in ctx: inout GraphicsContext, size: CGSize, v: Viewport) {
         var taken: [CGRect] = []
         let screen = CGRect(origin: .zero, size: size)
-        let order = layout.nodes.filter { $0.depth <= 1 && ($0.depth == 1 || $0.childCount > 0) }.sorted { ($0.depth, -$0.childCount) < ($1.depth, -$1.childCount) }
+        let order = layout.nodes.filter { $0.depth <= 1 && ($0.depth == 1 || $0.childCount > 0) && screen.contains(v.screen($0.center)) }.sorted { ($0.depth, -$0.childCount) < ($1.depth, -$1.childCount) }
         for p in order.prefix(120) {
             let at = v.screen(p.center)
             guard screen.contains(at) else { continue }
@@ -745,7 +766,8 @@ struct CanvasView: View {
         if draggingNode == nil {
             for p in layout.nodes where p.hiddenCount > 0 || (p.childCount > 0 && (p.id.name == hovered || session.selection.contains(p.id.name))) {
                 let folded = p.hiddenCount > 0
-                let anchor = v.screen(MapLayout.Point(x: p.x + p.w - p.anchorInset, y: p.y + p.anchorY))
+                // Just outside the node, level with where its links leave, so it never covers the node.
+                let anchor = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.anchorY))
                 let w = folded ? MapButton.foldWidth(p.hiddenCount) : 2 * r
                 out.append(MapButton(at: CGPoint(x: anchor.x + 3 + w / 2, y: anchor.y), kind: folded ? .unfold : .fold, node: p.id.name,
                                      count: p.hiddenCount, tint: Theme.Map.branch(p.branch)))
@@ -756,7 +778,9 @@ struct CanvasView: View {
             for name in session.selection.sorted().prefix(24) {
                 guard let p = layout[name] else { continue }
                 let side = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.h / 2))
-                let x = max(side.x, foldRight[name] ?? side.x) + r + 6
+                var x = max(side.x, foldRight[name] ?? side.x) + r + 6
+                // Clear of the ✕ above the corner of a node waiting for review.
+                if session.review.nodes.contains(name) { x = max(x, side.x + 3 * r + 5) }
                 out.append(MapButton(at: CGPoint(x: x, y: side.y - 2 * r - 2), kind: .details, node: name))
                 out.append(MapButton(at: CGPoint(x: x, y: side.y), kind: .rename, node: name))
                 out.append(MapButton(at: CGPoint(x: x, y: side.y + 2 * r + 2), kind: .expand, node: name, enabled: session.running == nil))
@@ -796,7 +820,11 @@ struct CanvasView: View {
 
     /// The map button under a click, if any.
     private func hitButton(_ point: CGPoint, _ layout: MapLayout) -> MapButton? {
-        mapButtons(layout, view).last { abs($0.at.x - point.x) <= $0.width / 2 + 2 && abs($0.at.y - point.y) <= MapButton.radius + 2 }
+        // A fold button reaches a little further, so the pointer crossing to it from its node keeps it.
+        mapButtons(layout, view).last {
+            let reach: CGFloat = $0.kind == .fold || $0.kind == .unfold ? 4 : 2
+            return abs($0.at.x - point.x) <= $0.width / 2 + reach && abs($0.at.y - point.y) <= MapButton.radius + 2
+        }
     }
 
     private func press(_ b: MapButton) {
@@ -1033,6 +1061,9 @@ struct CanvasView: View {
                 // The first movement decides what this drag is; a spread stops where it is.
                 if spreadTask != nil { finishSpread(commit: true) }
                 hovered = nil
+                hoveredEdge = nil
+                // The hand moves the map from here: no glide pulls a node away from it.
+                morph = nil
                 if let name = hit(value.startLocation, layout) {
                     if NSEvent.modifierFlags.contains(.option) { linkDrag = (name, value.location) } else { draggingNode = (name, value.translation) }
                 } else if NSEvent.modifierFlags.contains(.shift) {
@@ -1110,7 +1141,7 @@ struct CanvasView: View {
             Button("Expand \(names.count) nodes") { names.forEach { session.expand($0) } }
             Button("Copy \(names.count) names") { Clipboard.copy(names.joined(separator: "\n")) }
             Divider()
-            Button("Delete \(names.count) nodes", role: .destructive) { names.forEach { session.dispatch(.delete($0)) }; session.selection = [] }
+            Button("Delete \(names.count) nodes", role: .destructive) { deleteNodes(names) }
         } else if let key = session.selectedEdge, let edge = graph.edges[key] {
             if session.review.edges.contains(key) {
                 Button("Accept the model's link") { session.accept(edge: key) }
@@ -1223,6 +1254,8 @@ struct FindBar: View {
     @Binding var text: String
     let count: Int
     let index: Int
+    /// Changes when ⌘F is pressed again: the field takes the cursor back.
+    var focusToken = 0
     let step: (Int) -> Void
     let close: () -> Void
     @FocusState private var focused: Bool
@@ -1254,6 +1287,7 @@ struct FindBar: View {
         .floatingBar(in: Capsule())
         .shieldsMapScroll()
         .onAppear { focused = true }
+        .onChange(of: focusToken) { _, _ in focused = true }
     }
 }
 

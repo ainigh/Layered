@@ -157,7 +157,7 @@ public enum Export {
                 // A folded branch: how many nodes it hides, where it would leave the node.
                 let ink = palette.hue(n.branch)?.ink ?? palette.textSecondary
                 let text = "+\(n.hiddenCount)"
-                let pw = max(18, Double(text.count) * 6.2 + 10), px = n.w - n.anchorInset + 3, py = n.anchorY - 9
+                let pw = max(18, Double(text.count) * 6.2 + 10), px = n.w + 3, py = n.anchorY - 9
                 out.append("<rect x=\"\(fmt(px))\" y=\"\(fmt(py))\" width=\"\(fmt(pw))\" height=\"18\" rx=\"9\" fill=\"\(palette.background)\" stroke=\"\(ink)\" stroke-width=\"1\"/>")
                 out.append("<text x=\"\(fmt(px + pw / 2))\" y=\"\(fmt(n.anchorY))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"\(ink)\">\(text)</text>")
             }

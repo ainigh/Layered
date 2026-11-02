@@ -154,10 +154,16 @@ final class MapSession {
         return state.graph
     }
 
-    /// The layout the canvas draws: the live map's, or the turn History is showing.
+    /// The layout the canvas draws: the live map's, or the turn History is showing (laid out
+    /// once per turn, folds and log length, not on every redraw).
     var displayedLayout: MapLayout {
-        viewingTurn == nil ? layout : lay(displayedGraph)
+        guard let turn = viewingTurn else { return layout }
+        if let c = turnLayout, c.turn == turn, c.collapsed == ui.collapsed, c.log == state.log.count { return c.layout }
+        let laid = lay(displayedGraph)
+        turnLayout = (turn, ui.collapsed, state.log.count, laid)
+        return laid
     }
+    @ObservationIgnored private var turnLayout: (turn: Int, collapsed: [String], log: Int, layout: MapLayout)?
 
     /// Lays a graph out as GridClip draws maps, measuring text as the canvas sets it.
     func lay(_ graph: Graph) -> MapLayout {

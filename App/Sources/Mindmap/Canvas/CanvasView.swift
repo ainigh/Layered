@@ -17,8 +17,9 @@ import Harness
 /// The map fits the view when it opens and refits as the window resizes or the map grows,
 /// until the user moves or zooms it. Buttons, keys and fit glide; drags follow the hand.
 /// Fill the view fits the map, then lets its nodes slide into the room around them and
-/// refits as they go, until zooming in gains nothing more (`Spread`); where they end up is
-/// pinned in one turn, so one undo puts the map back.
+/// refits as they go, until zooming in gains nothing more (`Spread`); no frame of it has two
+/// links crossing or a link through a node. Where they end up is pinned in one turn, so one
+/// undo puts the map back.
 ///
 /// What the model added and the user has not decided on yet (`session.review`) wears a
 /// dashed ring, with ✓ (keep it) and ✕ (delete it) above its top right corner; a link

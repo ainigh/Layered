@@ -396,7 +396,7 @@ public struct MapLayout: Equatable, Sendable {
     }
 
     /// Each edge's `a` end and directions, so a moved node can re-route its edges.
-    private var directions: [EdgeKey: (a: String, forward: Bool, backward: Bool)] = [:]
+    private(set) var directions: [EdgeKey: (a: String, forward: Bool, backward: Bool)] = [:]
 
     public static func == (l: MapLayout, r: MapLayout) -> Bool {
         l.nodes == r.nodes && l.edges == r.edges
@@ -616,41 +616,52 @@ public struct MapLayout: Equatable, Sendable {
 
     /// A cubic from one node's side to the other's, with the label at its middle.
     static func route(_ placed: inout PlacedEdge, _ edge: Edge, _ a: PlacedNode, _ b: PlacedNode) {
+        let c = curve(Ends(a), Ends(b))
+        let (p0, p1, p2, p3) = (c.p0, c.p1, c.p2, c.p3)
+        placed.p0 = p0; placed.p1 = p1; placed.p2 = p2; placed.p3 = p3
+        placed.labelAt = Point(x: ((p0.x + 3 * p1.x + 3 * p2.x + p3.x) / 8).rounded(), y: ((p0.y + 3 * p1.y + 3 * p2.y + p3.y) / 8).rounded())
+        placed.arrowEnd = c.fromA ? edge.forward : edge.backward
+        placed.arrowStart = c.fromA ? edge.backward : edge.forward
+    }
+
+    /// What routing needs to know of a node: its box, where edges meet it, and whether it is pinned.
+    struct Ends: Sendable {
+        var x, y, w, h, anchorY, anchorInset: Double
+        var pinned: Bool
+        init(x: Double, y: Double, w: Double, h: Double, anchorY: Double, anchorInset: Double, pinned: Bool) {
+            (self.x, self.y, self.w, self.h, self.anchorY, self.anchorInset, self.pinned) = (x, y, w, h, anchorY, anchorInset, pinned)
+        }
+        init(_ n: PlacedNode) {
+            self.init(x: n.x, y: n.y, w: n.w, h: n.h, anchorY: n.anchorY, anchorInset: n.anchorInset, pinned: n.pinned)
+        }
+    }
+
+    /// The cubic an edge from `a` to `b` is drawn as, and whether it leaves from `a`.
+    static func curve(_ a: Ends, _ b: Ends) -> (p0: Point, p1: Point, p2: Point, p3: Point, fromA: Bool) {
         // Left to right where the nodes allow it; top to bottom between two placed nodes
         // stacked one over the other; otherwise bulge out to the right.
         let (s, t) = a.x <= b.x ? (a, b) : (b, a)
         let sy = s.y + s.anchorY, ty = t.y + t.anchorY
         let sRight = s.x + s.w - s.anchorInset, tLeft = t.x + t.anchorInset, tRight = t.x + t.w - t.anchorInset
         let (u, d) = a.y <= b.y ? (a, b) : (b, a)
-        let p0: Point, p1: Point, p2: Point, p3: Point
-        // The node the curve leaves from.
-        var start = s
         if sRight >= tLeft, a.pinned, b.pinned, u.y + u.h + Metrics.siblingGap < d.y {
-            start = u
-            p0 = Point(x: u.x + u.w / 2, y: u.y + u.h)
-            p3 = Point(x: d.x + d.w / 2, y: d.y)
+            // The curve leaves from the upper node.
+            let p0 = Point(x: u.x + u.w / 2, y: u.y + u.h)
+            let p3 = Point(x: d.x + d.w / 2, y: d.y)
             let dy = (p3.y - p0.y) / 2
-            p1 = Point(x: p0.x, y: p0.y + dy)
-            p2 = Point(x: p3.x, y: p3.y - dy)
+            return (p0, Point(x: p0.x, y: p0.y + dy), Point(x: p3.x, y: p3.y - dy), p3, a.y <= b.y)
         } else if sRight < tLeft {
-            p0 = Point(x: sRight, y: sy)
-            p3 = Point(x: tLeft, y: ty)
+            let p0 = Point(x: sRight, y: sy)
+            let p3 = Point(x: tLeft, y: ty)
             let dx = (p3.x - p0.x) / 2
-            p1 = Point(x: p0.x + dx, y: sy)
-            p2 = Point(x: p3.x - dx, y: ty)
+            return (p0, Point(x: p0.x + dx, y: sy), Point(x: p3.x - dx, y: ty), p3, a.x <= b.x)
         } else {
             // Overlapping columns: right side to right side, around the outside.
-            p0 = Point(x: sRight, y: sy)
-            p3 = Point(x: tRight, y: ty)
+            let p0 = Point(x: sRight, y: sy)
+            let p3 = Point(x: tRight, y: ty)
             let out = max(p0.x, p3.x) + 40 + abs(ty - sy) * 0.15
-            p1 = Point(x: out, y: sy)
-            p2 = Point(x: out, y: ty)
+            return (p0, Point(x: out, y: sy), Point(x: out, y: ty), p3, a.x <= b.x)
         }
-        placed.p0 = p0; placed.p1 = p1; placed.p2 = p2; placed.p3 = p3
-        placed.labelAt = Point(x: ((p0.x + 3 * p1.x + 3 * p2.x + p3.x) / 8).rounded(), y: ((p0.y + 3 * p1.y + 3 * p2.y + p3.y) / 8).rounded())
-        let fromA = start.id == a.id
-        placed.arrowEnd = fromA ? edge.forward : edge.backward
-        placed.arrowStart = fromA ? edge.backward : edge.forward
     }
 
     private mutating func fitBounds(measure: Measure) {

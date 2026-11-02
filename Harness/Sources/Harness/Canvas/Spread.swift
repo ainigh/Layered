@@ -15,8 +15,11 @@ import Foundation
 ///
 /// Nodes move by whole points, so the centres it hands the canvas are the ones it checked.
 ///
-/// A node blocked on its way in slides sideways, away from what blocks it, to get around it.
-/// It stops when the zoom has not grown for a while, has reached `maxZoom`, or nothing moves.
+/// A node blocked on its way in slides sideways, away from what blocks it, to get around it
+/// (nudging a node in the way along with it); failing that it takes a shorter step in, or
+/// moves together with the branch that hangs from it, which keeps every link inside the branch
+/// as it is. It stops when the zoom has not grown for a while, has reached `maxZoom`, or
+/// nothing moves.
 public struct Spread: Sendable {
     struct Box: Sendable {
         var x, y, w, h: Double
@@ -41,12 +44,19 @@ public struct Spread: Sendable {
     public private(set) var steps = 0
     public private(set) var finished = false
     private var best = 0.0
+    /// How many times each node has moved this step, and the most it may.
+    private var stirred: [Int] = []
+    static let movesPerStep = 2
     /// Which way each node last slid to get around something (+1 or −1).
     private var side: [Double]
     private var sinceBest = 0
     /// Each link's two nodes (its `a` end first, as the layout routes it), the links at each
     /// node, and each link's curve now.
     let links: [(a: Int, b: Int)]
+    /// Each node with what hangs under it in its tree (itself first), when that is a branch
+    /// small enough to move as one.
+    private var branches: [[Int]] = []
+    static let maxBranch = 20
     private let linksAt: [[Int]]
     private(set) var lines: [Line]
     /// Links kept clear: the trees', and cross-links clear of everything at the start.
@@ -85,8 +95,15 @@ public struct Spread: Sendable {
         }
         self.links = links
         self.linksAt = linksAt
+        var kids = Array(repeating: [Int](), count: boxes.count)
+        for (p, cs) in layout.children { if let pi = layout.index[p] { kids[pi] = cs.compactMap { layout.index[$0] } } }
+        branches = boxes.indices.map { i in
+            var out = [i], k = 0
+            while k < out.count, out.count <= Self.maxBranch { out.append(contentsOf: kids[out[k]]); k += 1 }
+            return out.count > 1 && out.count <= Self.maxBranch ? out : []
+        }
         lines = []
-        kept = tree
+        kept = ProcessInfo.processInfo.environment["NOLINKS"] != nil ? tree.map { _ in false } : tree
         self.gap = max(0, gap)
         self.viewWidth = max(1, viewWidth)
         self.viewHeight = max(1, viewHeight)
@@ -97,7 +114,7 @@ public struct Spread: Sendable {
         for i in boxes.indices { nodeCells.put(i, Self.area(boxes[i])) }
         for e in links.indices where kept[e] { lineCells.put(e, Self.area(lines[e])) }
         // Cross-links clear of the trees, the nodes and each other are kept clear too.
-        for e in links.indices where !kept[e] {
+        for e in links.indices where !kept[e] && ProcessInfo.processInfo.environment["NOLINKS"] == nil {
             var clear = true
             clashes(ofLink: e) { _ in clear = false; return false }
             if clear { kept[e] = true; lineCells.put(e, Self.area(lines[e])) }
@@ -147,7 +164,10 @@ public struct Spread: Sendable {
         let order = boxes.indices.map { ($0, pull($0).far) }.sorted { ($0.1, $0.0) < ($1.1, $1.0) }.map(\.0)
 
         var moved = false
-        for i in order {
+        // Each node moves at most twice a step (on its turn, nudged, or with a branch), so
+        // no node goes further than two short steps.
+        stirred = Array(repeating: 0, count: boxes.count)
+        for i in order where stirred[i] < Self.movesPerStep {
             let p = pull(i)
             let norm = hypot(p.x, p.y)
             guard norm > 0, hypot(cx - boxes[i].cx, cy - boxes[i].cy) > length else { continue }
@@ -159,7 +179,7 @@ public struct Spread: Sendable {
             for (dx, dy) in [(ux, uy), along] {
                 switch attempt(i, dx * length, dy * length, fit: fit, grid: grid) {
                 case .moved: done = true
-                case .blocked(let at): blocker = blocker ?? at
+                case .blocked(let at, _): blocker = blocker ?? at
                 case .outside: break
                 }
                 if done { break }
@@ -171,9 +191,28 @@ public struct Spread: Sendable {
                 let away = sx * (boxes[i].cx - at.x) + sy * (boxes[i].cy - at.y)
                 if abs(away) > 1 { side[i] = away > 0 ? 1 : -1 }
                 for sign in [side[i], -side[i]] {
-                    if case .moved = attempt(i, sign * sx * length, sign * sy * length, fit: fit, grid: grid) { side[i] = sign; done = true; break }
+                    if case .moved = shove(i, sign * sx * length, sign * sy * length, fit: fit, grid: grid) { side[i] = sign; done = true; break }
                 }
             }
+            // Still blocked: a shorter step in, up to whatever is in the way.
+            if !done, length >= 4 {
+                for f in [0.5, 0.25] where !done {
+                    if case .moved = attempt(i, ux * length * f, uy * length * f, fit: fit, grid: grid) { done = true }
+                }
+            }
+            // Still stuck: move it with its branch, which keeps every link inside the branch as it is.
+            var movedWithBranch = false
+            if !done, !branches[i].isEmpty, !branches[i].contains(where: { stirred[$0] >= Self.movesPerStep }) {
+                for (dx, dy) in [(ux, uy), along] {
+                    if attempt(branches[i], dx * length, dy * length, fit: fit, grid: grid) {
+                        for m in branches[i] { stirred[m] += 1 }
+                        done = true
+                        movedWithBranch = true
+                        break
+                    }
+                }
+            }
+            if done, !movedWithBranch { stirred[i] += 1 }
             moved = moved || done
         }
 
@@ -184,7 +223,18 @@ public struct Spread: Sendable {
 
     // MARK: - Helpers
 
-    private enum Outcome { case moved, blocked(MapLayout.Point), outside }
+    /// Moved; blocked by something there (and the node too close, if that is it); or it would leave the fit.
+    private enum Outcome { case moved, blocked(MapLayout.Point, by: Int?), outside }
+
+    /// Moves node `i` by (dx, dy); when a node is too close in that direction, first tries
+    /// moving that one the same way (a node in its way is not pushed on), then node `i` again.
+    private mutating func shove(_ i: Int, _ dx: Double, _ dy: Double, fit: (x0: Double, y0: Double, x1: Double, y1: Double), grid: Grid) -> Outcome {
+        let first = attempt(i, dx, dy, fit: fit, grid: grid)
+        guard case .blocked(_, let by?) = first, by != i, stirred[by] < Self.movesPerStep,
+              case .moved = attempt(by, dx, dy, fit: fit, grid: grid) else { return first }
+        stirred[by] += 1
+        return attempt(i, dx, dy, fit: fit, grid: grid)
+    }
 
     /// Moves node `i` by (dx, dy), cut to whole points, when that keeps it in `fit`, no closer
     /// than `gap` to any node it was not already too close to, and tangles none of the links
@@ -197,7 +247,7 @@ public struct Spread: Sendable {
         guard next.x >= fit.x0 - 0.5, next.y >= fit.y0 - 0.5, next.x + next.w <= fit.x1 + 0.5, next.y + next.h <= fit.y1 + 0.5 else { return .outside }
         for j in grid.near(next) where j != i {
             let after = overlap(next, boxes[j])
-            if after > 0, after > overlap(boxes[i], boxes[j]) { return .blocked(MapLayout.Point(x: boxes[j].cx, y: boxes[j].cy)) }
+            if after > 0, after > overlap(boxes[i], boxes[j]) { return .blocked(MapLayout.Point(x: boxes[j].cx, y: boxes[j].cy), by: j) }
         }
         let was = boxes[i]
         let wasLines = linksAt[i].map { lines[$0] }
@@ -210,7 +260,53 @@ public struct Spread: Sendable {
         }
         guard let code = hit else { return .moved }
         place(i, was, Array(zip(linksAt[i], wasLines)))
-        return .blocked(obstacle(code, moving: i))
+        return .blocked(obstacle(code, moving: i), by: nil)
+    }
+
+    /// Moves a group of nodes together by (dx, dy), cut to whole points, on the same terms as
+    /// one node: in `fit`, no closer than `gap` to a node outside it, and tangling nothing.
+    private mutating func attempt(_ group: [Int], _ dx: Double, _ dy: Double, fit: (x0: Double, y0: Double, x1: Double, y1: Double), grid: Grid) -> Bool {
+        let dx = dx.rounded(.towardZero), dy = dy.rounded(.towardZero)
+        guard dx != 0 || dy != 0 else { return false }
+        let inGroup = Set(group)
+        for i in group {
+            var next = boxes[i]
+            next.x += dx; next.y += dy
+            guard next.x >= fit.x0 - 0.5, next.y >= fit.y0 - 0.5, next.x + next.w <= fit.x1 + 0.5, next.y + next.h <= fit.y1 + 0.5 else { return false }
+            for j in grid.near(next) where !inGroup.contains(j) {
+                let after = overlap(next, boxes[j])
+                if after > 0, after > overlap(boxes[i], boxes[j]) { return false }
+            }
+        }
+        let was = group.map { boxes[$0] }
+        let touched = Spread.ordered(group.flatMap { linksAt[$0] })
+        let wasLines = touched.map { lines[$0] }
+        for i in group {
+            boxes[i].x += dx; boxes[i].y += dy
+            nodeCells.put(i, Self.area(boxes[i]))
+        }
+        for e in touched {
+            lines[e] = line(e)
+            if kept[e] { lineCells.put(e, Self.area(lines[e])) }
+        }
+        var clear = true
+        for i in group where clear {
+            clashes(of: i) { code in
+                if allowed.contains(code) { return true }
+                clear = false
+                return false
+            }
+        }
+        if clear { return true }
+        for (i, b) in zip(group, was) {
+            boxes[i] = b
+            nodeCells.put(i, Self.area(b))
+        }
+        for (e, l) in zip(touched, wasLines) {
+            lines[e] = l
+            if kept[e] { lineCells.put(e, Self.area(l)) }
+        }
+        return false
     }
 
     /// Puts node `i` at `box` and its links on these curves, keeping the cells up to date.
@@ -363,22 +459,23 @@ public struct Spread: Sendable {
         let x0 = b.x - c, y0 = b.y - c, x1 = b.x + b.w + c, y1 = b.y + b.h + c
         for s in 1..<l.points.count {
             let p = l.points[s - 1], q = l.points[s]
-            // Clip the segment to the box (Liang–Barsky).
-            var lo = 0.0, hi = 1.0
-            let dx = q.x - p.x, dy = q.y - p.y
-            var inside = true
-            for (num, den) in [(p.x - x0, -dx), (x1 - p.x, dx), (p.y - y0, -dy), (y1 - p.y, dy)] {
-                if abs(den) < 1e-12 {
-                    if num < 0 { inside = false; break }
-                } else {
-                    let r = num / den
-                    if den < 0 { lo = max(lo, r) } else { hi = min(hi, r) }
-                    if lo > hi { inside = false; break }
-                }
-            }
-            if inside { return true }
+            guard max(p.x, q.x) >= x0, min(p.x, q.x) <= x1, max(p.y, q.y) >= y0, min(p.y, q.y) <= y1 else { continue }
+            if clips(p, q, x0, y0, x1, y1) { return true }
         }
         return false
+    }
+
+    /// Does the segment from `p` to `q` touch the box (Liang–Barsky)?
+    static func clips(_ p: MapLayout.Point, _ q: MapLayout.Point, _ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
+        var lo = 0.0, hi = 1.0
+        let dx = q.x - p.x, dy = q.y - p.y
+        func edge(_ den: Double, _ num: Double) -> Bool {
+            if abs(den) < 1e-12 { return num >= 0 }
+            let r = num / den
+            if den < 0 { lo = max(lo, r) } else { hi = min(hi, r) }
+            return lo <= hi
+        }
+        return edge(-dx, p.x - x0) && edge(dx, x1 - p.x) && edge(-dy, p.y - y0) && edge(dy, y1 - p.y)
     }
 
     /// How far two nodes are inside each other's `gap` (0 when they are far enough apart).
@@ -467,10 +564,12 @@ public struct Spread: Sendable {
         }
 
         /// In index order, so a spread comes out the same every time.
+        /// In a fixed order, so a spread comes out the same every time (a node near two cells
+        /// may come twice).
         func near(_ b: Box) -> [Int] {
             var out: [Int] = []
             for key in Self.keys(b, reach) { if let ids = cells[key] { out.append(contentsOf: ids) } }
-            return Spread.ordered(out)
+            return out
         }
 
         static func keys(_ b: Box, _ reach: Double) -> [Int64] {

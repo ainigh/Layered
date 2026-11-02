@@ -31,7 +31,8 @@ final class SpreadTests: XCTestCase {
         while !spread.finished {
             spread.step()
             for (a, b) in zip(previous, spread.boxes) {
-                XCTAssertLessThanOrEqual(hypot(b.x - a.x, b.y - a.y), 10.01, "a step never jumps over a node")
+                XCTAssertLessThanOrEqual(hypot(b.x - a.x, b.y - a.y), 10.01 * Double(Spread.movesPerStep),
+                                         "a node moves a few points at a time, never far enough to jump over one")
             }
             previous = spread.boxes
         }

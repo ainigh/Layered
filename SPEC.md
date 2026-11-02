@@ -542,3 +542,21 @@ This replaces “Text from audio goes to the model in one request” above: audi
 ## Thinking off (2026-10-31)
 
 Every request to Ollama goes with `"think": false`, so a thinking model (qwen3, deepseek-r1…) answers at once instead of reasoning at length first; builds and models without thinking ignore it. A model that thinks anyway, writing `<think>…</think>` into its answer, has that part dropped as it streams (a tag split across chunks waits for the rest), so it never reaches Read, Facts or the gate, nor the Model log's reply.
+
+## The map moves, folds and finds (2026-11-02)
+
+**It glides.** When the map changes (the model adds to it, a turn is undone, History shows another turn, a branch folds or opens), every node glides from where it was to where it goes, and a new node grows out of its parent (or its nearest ancestor already on the map) and fades in, in about 0.4 s. A node dropped by hand, and a finished Fill the view, stay where they are. Off with Reduce motion, and for maps of more than 1,500 nodes.
+
+**Branches fold.** Where a branch leaves the hovered or selected node there is a **−**: it folds the branch, hiding everything that hangs under the node in its tree (and every link that touches it). A folded node shows **+n** in its branch's colour where the branch left it: click it to open the branch again. Also: **/** with the node selected, **Fold branch** / **Open branch** in its right-click menu, and **Map › Open every branch**. Folding never recolours another branch. Folds are kept in `ui.json` (`collapsed`). What the model adds under a fold opens it, so nothing new goes unseen.
+
+**Find on the map** (⌘F, or the map's right-click menu). A bar over the capture bar: as you type, the nodes whose name or shown notes hold every word (ignoring case and accents) get a warm ring and the rest of the map dims; the first match is selected and brought into view. ↩ and ⇧↩ (or the arrows on the bar) go to the next and previous match, opening any fold that hides it; it says *n of m*, or *No match*. Esc closes it.
+
+**An overview.** While some of the map is out of view, the bottom right corner (left of the zoom column, above the Model log) shows the whole map small, each branch in its colour, with the part on screen outlined: click or drag on it to go there. **M**, or the new last button of the zoom bar, turns it off and on.
+
+**Keys on the map.** With one node selected: ← goes to its parent, → to its child nearest level with it, ↑ ↓ to the nearest node above or below (its sibling, in a column), and the view follows; ↩ renames it; space opens its details; / folds or opens its branch. With a selection: ⌫ deletes it (⌘Z brings it back), **Z** zooms to it, esc lets it go. With nothing selected, or with ⇧, the arrows move the map as before.
+
+**Level of detail.** Below half size, notes and link labels are left out (they are too small to read). Below about a quarter, nodes are drawn as shapes (an open node's icon as a dot of its colour, names as soft bars) and each tree's root and first branches are named over them on chips, at a size to read, the roots first, leaving out a name that would cover another. Only what is on screen is drawn.
+
+**Weight.** A tree's links are heavier near its root and taper toward its leaves (2.25 pt from a root, 1.6 pt at the next level, then 1.25 pt); cross-links stay 1 pt hairlines. This replaces “1.25 pt in a tree” in **Canvas** above. A tree's root (an open node with children) sits on a faint plate; the hovered node is lit on one; the selected link glows; a new node's highlight fades out instead of switching off.
+
+**Undo in text boxes.** ⌘Z and ⇧⌘Z in a text box undo the typing; elsewhere they undo the map, as before.

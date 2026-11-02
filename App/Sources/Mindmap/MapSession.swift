@@ -81,6 +81,8 @@ final class MapSession {
     var detailsRequests = 0
     /// Bumped to open the context on the left, where a new item just went.
     var contextRequests = 0
+    /// Bumped by Map › Find on the map (⌘F): the canvas opens its find bar.
+    var findRequests = 0
     /// The Add text box, kept as it is typed.
     var composerDraft = "" { didSet { UserDefaults.standard.set(composerDraft, forKey: "draft:\(title)") } }
 
@@ -159,7 +161,43 @@ final class MapSession {
         let icons = self.icons
         return MapLayout.compute(graph, measure: { Theme.Map.measure($0, $1) },
                                  glyph: { MapLayout.defaultGlyph($0) || !icons.icons(for: $0.id.name, available: SymbolLibrary.exists).isEmpty },
-                                 icons: { MapSession.symbols(for: $0, icons: icons).count })
+                                 icons: { MapSession.symbols(for: $0, icons: icons).count },
+                                 collapsed: Set(ui.collapsed))
+    }
+
+    // MARK: - Folding
+
+    /// Folds `name`'s branch away (or opens it). What a fold hides leaves the selection.
+    /// Kept in `ui.json`, so the map opens folded as it was left.
+    func setFolded(_ name: String, _ folded: Bool) {
+        var set = Set(ui.collapsed)
+        if folded { set.insert(name) } else { set.remove(name) }
+        guard set != Set(ui.collapsed) else { return }
+        ui.collapsed = set.sorted()
+        saveUI()
+        relayout()
+        selection = selection.filter { layout[$0] != nil }
+    }
+
+    func toggleFold(_ name: String) { setFolded(name, !ui.collapsed.contains(name)) }
+
+    /// Every branch open again.
+    func unfoldAll() {
+        guard !ui.collapsed.isEmpty else { return }
+        ui.collapsed = []
+        saveUI()
+        relayout()
+    }
+
+    /// Opens whatever folds hide `name`, so it is on the map.
+    func reveal(_ name: String) {
+        var opened = false
+        while let top = layout.foldedUnder[name], let i = ui.collapsed.firstIndex(of: top) {
+            ui.collapsed.remove(at: i)
+            relayout()
+            opened = true
+        }
+        if opened { saveUI() }
     }
 
     /// The project's icon manifest (none: an empty one), backed by every symbol a name can match.
@@ -262,6 +300,12 @@ final class MapSession {
         }
         review.prune(next.graph)
         relayout()
+        // What just arrived under a fold would go unseen: its fold opens.
+        let folded = added.filter { layout.foldedUnder[$0] != nil }
+        if !folded.isEmpty { folded.forEach(reveal) }
+        // Highlights long faded are let go.
+        let stale = Date().addingTimeInterval(-(Theme.highlightSeconds + 1))
+        highlighted = highlighted.filter { $0.value > stale }
         viewingTurn = nil
         if Persistence.optimizeDue(state, settings: settings) { optimize() }
     }

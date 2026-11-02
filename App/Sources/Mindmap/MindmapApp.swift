@@ -35,6 +35,9 @@ struct MindmapApp: App {
                 Button("Check again") { model.session?.checkAgain() }
                 Button("Find duplicates") { model.session?.findDuplicates() }
                 Divider()
+                Button("Find on the map…") { model.session?.findRequests += 1 }.keyboardShortcut("f", modifiers: .command)
+                Button("Open every branch") { model.session?.unfoldAll() }
+                Divider()
                 Menu("Export") {
                     ForEach(MapSession.ExportFormat.allCases, id: \.self) { f in
                         Button(f.rawValue) { model.export(f) }

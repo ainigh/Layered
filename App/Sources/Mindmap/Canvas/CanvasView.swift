@@ -54,6 +54,16 @@ struct CanvasView: View {
     @State private var spreadFrom: MapLayout?
     /// The least room Fill the view leaves between two nodes, in map points.
     @AppStorage("map.spacing") private var spacing: Double = 24
+    /// The map gliding from one layout to the next, and where the next glide starts when the
+    /// canvas already shows it (a dropped node, a finished spread).
+    @State private var morph: Morph?
+    @State private var morphFrom: MapLayout?
+    /// Find on the map: the bar is open, what it looks for, and which match is current.
+    @State private var finding = false
+    @State private var findText = ""
+    @State private var findIndex = 0
+    /// The overview in the bottom right, while some of the map is out of view.
+    @AppStorage("map.minimap") private var minimapOn = true
     private let tick = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -63,13 +73,18 @@ struct CanvasView: View {
         // Read here so the canvas redraws when something is accepted or deleted.
         let _ = session.review
         let layout = draggingNode.map { base.moving($0.name, dx: $0.offset.width / view.k, dy: $0.offset.height / view.k) } ?? base
+        let found = finding ? live.search(findText, in: graph) : []
+        let current = found.isEmpty ? nil : found[min(findIndex, found.count - 1)]
 
         GeometryReader { geo in
             ZStack {
-                TimelineView(.animation(paused: glide == nil)) { timeline in
+                TimelineView(.animation(paused: glide == nil && morph == nil)) { timeline in
                     let v = shown(at: timeline.date)
+                    let t = morph.map { $0.progress(at: timeline.date) } ?? 1
+                    let drawn = morph.map { layout.morphed(from: $0.from, t: t) } ?? layout
+                    let marks = Marks(arrivals: morph?.arrivals ?? [], fade: t, found: Set(found), current: current)
                     Canvas(rendersAsynchronously: layout.nodes.count > 500) { ctx, size in
-                        draw(graph: graph, layout: layout, in: &ctx, size: size, v: v)
+                        draw(graph: graph, layout: drawn, marks: marks, in: &ctx, size: size, v: v)
                     }
                 }
                 .gesture(canvasDrag(layout: layout))
@@ -84,7 +99,9 @@ struct CanvasView: View {
                 .contextMenu { contextMenu(graph: graph) }
                 .onContinuousHover { phase in
                     guard draggingNode == nil, panStart == nil else { return }
-                    if case .active(let p) = phase { hovered = hit(p, layout) } else { hovered = nil }
+                    guard case .active(let p) = phase else { hovered = nil; return }
+                    // On the hovered node's fold button, the node stays hovered so the button stays.
+                    if let name = hit(p, layout) { hovered = name } else if let b = hitButton(p, layout), b.kind == .fold, b.node == hovered {} else { hovered = nil }
                 }
                 .focusable()
                 .focusEffectDisabled()
@@ -106,10 +123,15 @@ struct CanvasView: View {
                         .allowsHitTesting(false)
                 }
                 if layout.nodes.isEmpty { EmptyMap() }
-                if let turn = session.viewingTurn {
-                    // Bottom centre, above the capture bar: the top of the map holds the action bar.
-                    VStack {
-                        Spacer()
+                // Bottom centre, above the capture bar: the top of the map holds the action bar.
+                VStack(spacing: Theme.Space.s) {
+                    Spacer()
+                    if finding {
+                        FindBar(text: $findText, count: found.count, index: min(findIndex, max(0, found.count - 1)),
+                                step: { stepFind($0, found) }, close: closeFind)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    if let turn = session.viewingTurn {
                         HStack(spacing: Theme.Space.s) {
                             Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
                             Text("Turn \(turn), read-only").font(Theme.label)
@@ -118,14 +140,23 @@ struct CanvasView: View {
                         .padding(.leading, Theme.Space.m).padding(.trailing, Theme.Space.xs).padding(.vertical, Theme.Space.xs)
                         .floatingBar(in: Capsule())
                     }
-                    .padding(Theme.Space.m)
-                    .padding(.bottom, 52)
+                }
+                .padding(Theme.Space.m)
+                .padding(.bottom, 52)
+                if minimapOn, live.nodes.count > 1, !inView(live) {
+                    Minimap(layout: live, view: view, viewSize: size) { point, animate in centre(on: point, animate: animate) }
+                        .shieldsMapScroll()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        // Left of the zoom column, above the Model log's pill.
+                        .padding(.trailing, Theme.Space.m + ZoomBar.width + Theme.Space.s)
+                        .padding(.bottom, Theme.Space.m + 30 + Theme.Space.s)
+                        .transition(.opacity)
                 }
                 // The Model log's button sits to their left (`ModelLogDrawer`).
                 VStack(spacing: Theme.Space.s) {
                     SpacingBar(spacing: $spacing) { fillView(restart: true) }
                     ZoomBar(zoomIn: { zoom(by: Theme.Map.zoomStep) }, zoomOut: { zoom(by: 1 / Theme.Map.zoomStep) }, fit: refit,
-                            fill: { fillView() }, filling: spreadTask != nil)
+                            fill: { fillView() }, filling: spreadTask != nil, minimap: $minimapOn)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .padding(Theme.Space.m)
@@ -133,6 +164,7 @@ struct CanvasView: View {
             .background(Theme.Map.background)
             .clipped()
             .animation(Theme.selection, value: hovered)
+            .animation(Theme.slide, value: finding)
             .onScrollWheel(shields: shields) { delta, location, zooms in
                 if zooms {
                     zoom(by: exp(delta.height * 0.01), at: location, animate: false)
@@ -143,10 +175,17 @@ struct CanvasView: View {
             }
             .onAppear { size = geo.size; fit(layout: base, animate: false) }
             .onChange(of: geo.size) { _, s in size = s; if !touched { fit(layout: base, animate: false) } }
-            .onChange(of: live) { _, next in
+            .onChange(of: live) { old, next in
                 // The map changed under a spread: what it was arranging is gone.
                 if next != spreadFrom { finishSpread(commit: false) }
+                startMorph(from: morphFrom ?? onScreen(old), to: next)
+                morphFrom = nil
                 if !touched { fit(layout: next, animate: true) }
+            }
+            .onChange(of: session.findRequests) { _, _ in openFind() }
+            .onChange(of: findText) { _, _ in
+                findIndex = 0
+                if let first = live.search(findText, in: graph).first { show(found: first) }
             }
             .onDisappear { finishSpread(commit: false) }
             .onChange(of: session.viewingTurn) { _, _ in touched = false; fit(layout: session.displayedLayout, animate: true) }
@@ -214,6 +253,95 @@ struct CanvasView: View {
         fit(layout: session.displayedLayout, animate: true)
     }
 
+    /// Is the whole map on screen at the current view?
+    private func inView(_ layout: MapLayout) -> Bool {
+        guard size.width > 0 else { return true }
+        let a = view.screen(MapLayout.Point(x: layout.minX, y: layout.minY))
+        let b = view.screen(MapLayout.Point(x: layout.maxX, y: layout.maxY))
+        return a.x >= -1 && a.y >= -1 && b.x <= size.width + 1 && b.y <= size.height + 1
+    }
+
+    /// Moves the view so the map point `p` is at its centre, at the same zoom.
+    private func centre(on p: MapLayout.Point, animate: Bool) {
+        touched = true
+        go(Viewport(x: size.width / 2 - CGFloat(p.x) * view.k, y: size.height / 2 - CGFloat(p.y) * view.k, k: view.k), animate: animate)
+    }
+
+    /// Brings a node into view (gliding as little as it takes), unless it already is.
+    private func bringIntoView(_ name: String) {
+        guard let p = session.displayedLayout[name], size.width > 0 else { return }
+        let margin: CGFloat = 60
+        let a = view.screen(MapLayout.Point(x: p.x, y: p.y)), b = view.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.h))
+        var dx: CGFloat = 0, dy: CGFloat = 0
+        if b.x - a.x > size.width - 2 * margin || b.y - a.y > size.height - 2 * margin {
+            centre(on: p.center, animate: true)
+            return
+        }
+        if a.x < margin { dx = margin - a.x } else if b.x > size.width - margin { dx = size.width - margin - b.x }
+        if a.y < margin { dy = margin - a.y } else if b.y > size.height - margin { dy = size.height - margin - b.y }
+        guard dx != 0 || dy != 0 else { return }
+        touched = true
+        go(Viewport(x: view.x + dx, y: view.y + dy, k: view.k), animate: true)
+    }
+
+    /// Zooms to the selection: its nodes fill the view, no closer than 1.5×.
+    private func focusSelection() {
+        let nodes = session.selection.compactMap { session.displayedLayout[$0] }
+        guard !nodes.isEmpty, size.width > 0 else { return }
+        let x0 = nodes.map(\.x).min()!, y0 = nodes.map(\.y).min()!
+        let x1 = nodes.map { $0.x + $0.w }.max()!, y1 = nodes.map { $0.y + $0.h }.max()!
+        let pad: CGFloat = 80
+        let k = max(Theme.Map.minZoom, min(1.5, (size.width - 2 * pad) / max(1, CGFloat(x1 - x0)), (size.height - 2 * pad) / max(1, CGFloat(y1 - y0))))
+        touched = true
+        go(Viewport(x: size.width / 2 - CGFloat(x0 + x1) / 2 * k, y: size.height / 2 - CGFloat(y0 + y1) / 2 * k, k: k), animate: true)
+    }
+
+    // MARK: - Moving between layouts
+
+    /// What is on screen of `layout` now: itself, or a point on the glide toward it.
+    private func onScreen(_ layout: MapLayout) -> MapLayout {
+        guard let morph else { return layout }
+        return layout.morphed(from: morph.from, t: morph.progress(at: Date()))
+    }
+
+    /// The map glides from what was on screen to its new layout: nodes slide to their new
+    /// places, new ones grow out of their parents and fade in.
+    private func startMorph(from old: MapLayout, to next: MapLayout) {
+        guard !reduceMotion, spreading == nil, next.nodes.count <= Morph.maxNodes, old != next else { morph = nil; return }
+        let m = Morph(from: old, arrivals: next.arrivals(since: old), start: Date())
+        morph = m
+        DispatchQueue.main.asyncAfter(deadline: .now() + Morph.duration + 0.05) { if morph == m { morph = nil } }
+    }
+
+    // MARK: - Find on the map
+
+    private func openFind() {
+        withAnimation(Theme.slide) { finding = true }
+    }
+
+    private func closeFind() {
+        withAnimation(Theme.slide) { finding = false }
+        findText = ""
+        findIndex = 0
+    }
+
+    /// The next match (`by` 1) or the one before (−1), wrapping round.
+    private func stepFind(_ by: Int, _ found: [String]) {
+        guard !found.isEmpty else { return }
+        findIndex = ((min(findIndex, found.count - 1) + by) % found.count + found.count) % found.count
+        show(found: found[findIndex])
+    }
+
+    /// A match selected and in view, its fold opened if one hides it.
+    private func show(found name: String) {
+        session.reveal(name)
+        withAnimation(Theme.selection) {
+            session.selection = [name]
+            session.selectedEdge = nil
+        }
+        bringIntoView(name)
+    }
+
     /// Fill the view: the map arranged afresh (its pins ignored) and fitted, then its nodes
     /// slide into the room around them while it refits, until zooming in gains nothing more.
     /// Pressed again while it runs, it stops there; `restart` starts it over (the spacing changed).
@@ -264,6 +392,8 @@ struct CanvasView: View {
         if commit, let shown = spreading {
             spreading = nil
             touched = false
+            // The map is already where the spread left it: no glide from the old arrangement.
+            morphFrom = shown
             session.dispatch(.arrange(Dictionary(uniqueKeysWithValues: shown.nodes.map {
                 ($0.id.name, Position(x: $0.center.x.rounded(), y: $0.center.y.rounded()))
             })))
@@ -291,14 +421,68 @@ struct CanvasView: View {
             .onEnded { _ in pinchBase = nil }
     }
 
+    /// Keys on the map. With one node selected: the arrows go from node to node (left to its
+    /// parent, right to a child, up and down along its column), ↩ renames it, space opens its
+    /// details, / folds or opens its branch; ⌫ deletes the selection (⌘Z brings it back), Z zooms
+    /// to it, esc lets it go. Otherwise (or with ⇧) the arrows move the map. M shows or hides
+    /// the overview.
     private func key(_ press: KeyPress) -> Bool {
         guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return false }
+        let one = session.selection.count == 1 ? session.selection.first : nil
+        let live = session.viewingTurn == nil
         switch press.characters {
         case "+", "=": zoom(by: Theme.Map.zoomStep); return true
         case "-", "_": zoom(by: 1 / Theme.Map.zoomStep); return true
         case "0": refit(); return true
         case "f", "F": fillView(); return true
+        case "m", "M": withAnimation(Theme.slide) { minimapOn.toggle() }; return true
+        case "z", "Z":
+            guard !session.selection.isEmpty else { return false }
+            focusSelection(); return true
+        case "/":
+            guard live, let one, let p = session.displayedLayout[one], p.childCount > 0 else { return false }
+            withAnimation(Theme.selection) { session.toggleFold(one) }
+            return true
         default: break
+        }
+        switch press.key {
+        case .escape:
+            if finding { closeFind(); return true }
+            guard !session.selection.isEmpty || session.selectedEdge != nil else { return false }
+            withAnimation(Theme.selection) { session.selection = []; session.selectedEdge = nil }
+            return true
+        case .return:
+            guard live, let one else { return false }
+            renameText = one; renameTarget = one
+            return true
+        case .space:
+            guard let one else { return false }
+            session.selection = [one]
+            session.detailsRequests += 1
+            return true
+        case .delete, .deleteForward:
+            guard live, !session.selection.isEmpty else { return false }
+            for name in session.selection.sorted() { session.dispatch(.delete(name)) }
+            session.selection = []
+            return true
+        default: break
+        }
+        if let one, !press.modifiers.contains(.shift) {
+            let direction: MapLayout.Direction?
+            switch press.key {
+            case .leftArrow: direction = .left
+            case .rightArrow: direction = .right
+            case .upArrow: direction = .up
+            case .downArrow: direction = .down
+            default: direction = nil
+            }
+            if let direction {
+                if let next = session.displayedLayout.neighbour(of: one, direction) {
+                    withAnimation(Theme.selection) { session.selection = [next]; session.selectedEdge = nil }
+                    bringIntoView(next)
+                }
+                return true
+            }
         }
         let step: CGFloat = 60
         let move: CGSize
@@ -316,8 +500,9 @@ struct CanvasView: View {
 
     // MARK: - Drawing
 
-    private func draw(graph: Graph, layout: MapLayout, in ctx: inout GraphicsContext, size: CGSize, v: Viewport) {
+    private func draw(graph: Graph, layout: MapLayout, marks: Marks, in ctx: inout GraphicsContext, size: CGSize, v: Viewport) {
         drawDots(&ctx, size: size, v: v)
+        let detail = Detail(zoom: v.k)
 
         // The hovered node's links draw a little heavier; nothing else changes.
         var litEdges = Set<EdgeKey>()
@@ -328,21 +513,34 @@ struct CanvasView: View {
         var world = ctx
         world.translateBy(x: v.x, y: v.y)
         world.scaleBy(x: v.k, y: v.k)
+        // Only what is on screen is drawn (with a margin for icons, rings and labels).
+        let seen = CGRect(x: -v.x / v.k, y: -v.y / v.k, width: size.width / v.k, height: size.height / v.k).insetBy(dx: -60 / v.k, dy: -40 / v.k)
 
         for e in layout.edges {
+            let box = CGRect(x: min(e.p0.x, e.p3.x), y: min(e.p0.y, e.p3.y), width: abs(e.p3.x - e.p0.x), height: abs(e.p3.y - e.p0.y))
+                .union(CGRect(x: min(e.p1.x, e.p2.x), y: min(e.p1.y, e.p2.y), width: abs(e.p2.x - e.p1.x), height: abs(e.p2.y - e.p1.y)))
+            guard box.insetBy(dx: -2, dy: -2).intersects(seen) else { continue }
             var layer = world
-            drawEdge(e, graph.edges[e.key], lit: litEdges.contains(e.key), in: &layer)
+            layer.opacity = marks.opacity(e.key.lo.name, e.key.hi.name)
+            drawEdge(e, graph.edges[e.key], depth: max(layout[e.key.lo.name]?.depth ?? 0, layout[e.key.hi.name]?.depth ?? 0), lit: litEdges.contains(e.key), in: &layer)
         }
         for p in layout.nodes {
-            guard let node = graph.nodes[p.id] else { continue }
+            guard let node = graph.nodes[p.id], CGRect(x: p.x, y: p.y, width: p.w, height: p.h).intersects(seen) else { continue }
             var layer = world
-            drawNode(p, node, in: &layer)
+            layer.opacity = marks.opacity(p.id.name)
+            if marks.found.contains(p.id.name) { drawFound(p, current: marks.current == p.id.name, in: &layer) }
+            drawNode(p, node, detail: detail, in: &layer)
         }
-        // Labels last, so no curve runs through them.
-        for e in layout.edges where !e.label.isEmpty || !e.note.isEmpty {
-            var layer = world
-            drawLabel(e, in: &layer)
+        // Labels last, so no curve runs through them; too small to read, they are left out.
+        if detail == .full {
+            for e in layout.edges where (!e.label.isEmpty || !e.note.isEmpty) && seen.contains(CGPoint(e.labelAt)) {
+                var layer = world
+                layer.opacity = marks.opacity(e.key.lo.name, e.key.hi.name)
+                drawLabel(e, in: &layer)
+            }
         }
+        // Zoomed far out, the trees' roots and first branches are named at a size to read.
+        if detail == .shapes { drawOverviewNames(graph: graph, layout: layout, marks: marks, in: &ctx, size: size, v: v) }
         // Buttons on top, the same size at any zoom.
         for b in mapButtons(layout, v) { drawMapButton(b, in: &ctx) }
 
@@ -374,15 +572,26 @@ struct CanvasView: View {
         ctx.fill(dots, with: .color(Theme.Map.dot))
     }
 
-    private func drawNode(_ p: MapLayout.PlacedNode, _ node: Node, in ctx: inout GraphicsContext) {
+    private func drawNode(_ p: MapLayout.PlacedNode, _ node: Node, detail: Detail, in ctx: inout GraphicsContext) {
         let rect = CGRect(x: p.x, y: p.y, width: p.w, height: p.h)
         let src = node.note(kind: "src")
         let selected = session.selection.contains(p.id.name)
-        let fresh = session.highlighted[p.id.name].map { now.timeIntervalSince($0) < Theme.highlightSeconds } ?? false
+        // What just arrived glows, fading over a few seconds.
+        let age = session.highlighted[p.id.name].map { now.timeIntervalSince($0) } ?? .infinity
 
         if src == "guess" { ctx.opacity *= Theme.provenance(src).opacity }
-        if fresh {
-            ctx.fill(Path(roundedRect: rect.insetBy(dx: -6, dy: -6), cornerRadius: Theme.Map.corner + 6), with: .color(Theme.accent.opacity(0.22)))
+        if age < Theme.highlightSeconds {
+            let glow = 0.24 * (1 - age / Theme.highlightSeconds)
+            ctx.fill(Path(roundedRect: rect.insetBy(dx: -6, dy: -6), cornerRadius: Theme.Map.corner + 6), with: .color(Theme.accent.opacity(glow)))
+        }
+        if !p.boxed {
+            // A tree's root sits on a plate; a hovered node is lit on one.
+            let root = p.depth == 0 && p.childCount > 0
+            if root || hovered == p.id.name {
+                let plate = Path(roundedRect: rect.insetBy(dx: -4, dy: -2), cornerRadius: Theme.Map.corner + 2)
+                ctx.fill(plate, with: .color(Theme.Map.primary.opacity(root ? 0.05 : 0.04)))
+                if root { ctx.stroke(plate, with: .color(Theme.Map.primary.opacity(0.1)), lineWidth: 0.75) }
+            }
         }
         if selected {
             let ring = Path(roundedRect: rect.insetBy(dx: -3.5, dy: -3.5), cornerRadius: Theme.Map.corner + 3.5)
@@ -395,20 +604,68 @@ struct CanvasView: View {
             ctx.fill(ring, with: .color(Theme.accent.opacity(0.06)))
             ctx.stroke(ring, with: .color(Theme.accent.opacity(0.8)), style: StrokeStyle(lineWidth: 1.25, dash: [4, 3]))
         }
-        if p.boxed { drawCard(p, node, rect: rect, src: src, in: &ctx) } else { drawOpen(p, node, in: &ctx) }
+        if p.boxed { drawCard(p, node, rect: rect, src: src, detail: detail, in: &ctx) } else { drawOpen(p, node, detail: detail, in: &ctx) }
+    }
+
+    /// A match of Find on the map: a warm ring, filled for the current one.
+    private func drawFound(_ p: MapLayout.PlacedNode, current: Bool, in ctx: inout GraphicsContext) {
+        let ring = Path(roundedRect: CGRect(x: p.x, y: p.y, width: p.w, height: p.h).insetBy(dx: -5, dy: -5), cornerRadius: Theme.Map.corner + 5)
+        let ink = Color(nsColor: .systemYellow)
+        ctx.fill(ring, with: .color(ink.opacity(current ? 0.32 : 0.14)))
+        ctx.stroke(ring, with: .color(ink.opacity(current ? 1 : 0.7)), lineWidth: current ? 2 : 1)
+    }
+
+    /// Text too small to read drawn as a soft bar as long as it, so the map keeps its shape.
+    private func drawGreek(_ line: String, x: Double, y: Double, anchor: UnitPoint, maxWidth: Double, ink: Color, in ctx: inout GraphicsContext) {
+        let w = min(maxWidth, Double(line.count) * 6.6)
+        let h = 7.0
+        let x0 = anchor == .center ? x - w / 2 : x
+        ctx.fill(Path(roundedRect: CGRect(x: x0, y: y - h / 2, width: w, height: h), cornerRadius: h / 2), with: .color(ink.opacity(0.3)))
+    }
+
+    /// Zoomed far out: each tree's root and first-level branches named on a chip, at a size
+    /// to read, the roots first; a name that would cover one already drawn is left out.
+    private func drawOverviewNames(graph: Graph, layout: MapLayout, marks: Marks, in ctx: inout GraphicsContext, size: CGSize, v: Viewport) {
+        var taken: [CGRect] = []
+        let screen = CGRect(origin: .zero, size: size)
+        let order = layout.nodes.filter { $0.depth <= 1 && ($0.depth == 1 || $0.childCount > 0) }.sorted { ($0.depth, -$0.childCount) < ($1.depth, -$1.childCount) }
+        for p in order.prefix(120) {
+            let at = v.screen(p.center)
+            guard screen.contains(at) else { continue }
+            let root = p.depth == 0
+            let ink = root ? Theme.Map.primary : Theme.Map.branch(p.branch) ?? Theme.Map.primary
+            let text = ctx.resolve(Text(p.name).font(.system(size: root ? 13 : 11.5, weight: root ? .bold : .semibold)).foregroundStyle(ink))
+            let s = text.measure(in: CGSize(width: 220, height: 40))
+            let chip = CGRect(x: at.x - s.width / 2 - 6, y: at.y - s.height / 2 - 2, width: s.width + 12, height: s.height + 4)
+            guard !taken.contains(where: { $0.insetBy(dx: -2, dy: -2).intersects(chip) }) else { continue }
+            taken.append(chip)
+            var layer = ctx
+            layer.opacity = marks.opacity(p.id.name)
+            layer.fill(Path(roundedRect: chip, cornerRadius: chip.height / 2), with: .color(Theme.Map.background.opacity(0.9)))
+            layer.stroke(Path(roundedRect: chip, cornerRadius: chip.height / 2), with: .color(ink.opacity(0.35)), lineWidth: 1)
+            layer.draw(text, in: chip.insetBy(dx: 6, dy: 2))
+        }
     }
 
     /// A round button drawn on the map: ✓ or ✕ for something waiting for review, or ⓘ
     /// (details on the right), ✎ (rename) and ✦ (expand, staying on the map) beside a
     /// selected node.
     private struct MapButton {
-        enum Kind { case accept, reject, details, rename, expand }
+        enum Kind { case accept, reject, details, rename, expand, fold, unfold }
         let at: CGPoint
         let kind: Kind
         var node: String?
         var edge: EdgeKey?
         var enabled = true
+        /// Unfold: how many nodes the fold hides (its button reads “+n”).
+        var count = 0
+        /// The branch's colour, for fold buttons.
+        var tint: Color?
         static let radius: CGFloat = 9
+
+        /// Round, or a pill wide enough for “+n”.
+        var width: CGFloat { kind == .unfold ? Self.foldWidth(count) : 2 * Self.radius }
+        static func foldWidth(_ count: Int) -> CGFloat { max(2 * radius, CGFloat("+\(count)".count) * 6.2 + 10) }
     }
 
     /// ✓ ✕ above a node's top right corner, or under a link's label (on its curve when it
@@ -432,11 +689,24 @@ struct CanvasView: View {
             out.append(MapButton(at: CGPoint(x: at.x - r - 1, y: y), kind: .accept, edge: key))
             out.append(MapButton(at: CGPoint(x: at.x + r + 1, y: y), kind: .reject, edge: key))
         }
+        // Where a branch leaves its node: “+n” to open a folded one; on the hovered or
+        // selected node, − to fold it.
+        var foldRight: [String: CGFloat] = [:]
+        if draggingNode == nil {
+            for p in layout.nodes where p.hiddenCount > 0 || (p.childCount > 0 && (p.id.name == hovered || session.selection.contains(p.id.name))) {
+                let folded = p.hiddenCount > 0
+                let anchor = v.screen(MapLayout.Point(x: p.x + p.w - p.anchorInset, y: p.y + p.anchorY))
+                let w = folded ? MapButton.foldWidth(p.hiddenCount) : 2 * r
+                out.append(MapButton(at: CGPoint(x: anchor.x + 3 + w / 2, y: anchor.y), kind: folded ? .unfold : .fold, node: p.id.name,
+                                     count: p.hiddenCount, tint: Theme.Map.branch(p.branch)))
+                foldRight[p.id.name] = anchor.x + 3 + w
+            }
+        }
         if draggingNode == nil {
             for name in session.selection.sorted().prefix(24) {
                 guard let p = layout[name] else { continue }
                 let side = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.h / 2))
-                let x = side.x + r + 6
+                let x = max(side.x, foldRight[name] ?? side.x) + r + 6
                 out.append(MapButton(at: CGPoint(x: x, y: side.y - 2 * r - 2), kind: .details, node: name))
                 out.append(MapButton(at: CGPoint(x: x, y: side.y), kind: .rename, node: name))
                 out.append(MapButton(at: CGPoint(x: x, y: side.y + 2 * r + 2), kind: .expand, node: name, enabled: session.running == nil))
@@ -447,7 +717,8 @@ struct CanvasView: View {
 
     private func drawMapButton(_ b: MapButton, in ctx: inout GraphicsContext) {
         let r = MapButton.radius
-        let circle = Path(ellipseIn: CGRect(x: b.at.x - r, y: b.at.y - r, width: 2 * r, height: 2 * r))
+        let rect = CGRect(x: b.at.x - b.width / 2, y: b.at.y - r, width: b.width, height: 2 * r)
+        let shape = Path(roundedRect: rect, cornerRadius: r)
         let ink: Color, symbol: String
         switch b.kind {
         case .accept: ink = .green; symbol = "checkmark"
@@ -455,18 +726,27 @@ struct CanvasView: View {
         case .details: ink = Theme.accent; symbol = "info"
         case .rename: ink = Theme.accent; symbol = "pencil"
         case .expand: ink = Theme.accent; symbol = "sparkles"
+        case .fold: ink = b.tint ?? Theme.Map.secondary; symbol = "minus"
+        case .unfold: ink = b.tint ?? Theme.Map.secondary; symbol = ""
         }
         var layer = ctx
         if !b.enabled { layer.opacity = 0.4 }
-        layer.fill(Path(ellipseIn: CGRect(x: b.at.x - r, y: b.at.y - r + 1, width: 2 * r, height: 2 * r)), with: .color(.black.opacity(0.12)))
-        layer.fill(circle, with: .color(Theme.Map.background))
-        layer.stroke(circle, with: .color(ink.opacity(0.7)), lineWidth: 1)
+        layer.fill(Path(roundedRect: rect.offsetBy(dx: 0, dy: 1), cornerRadius: r), with: .color(.black.opacity(0.12)))
+        layer.fill(shape, with: .color(Theme.Map.background))
+        if b.kind == .unfold {
+            // A folded branch: its count on a tint of the branch's colour.
+            layer.fill(shape, with: .color(ink.opacity(0.14)))
+            layer.stroke(shape, with: .color(ink.opacity(0.8)), lineWidth: 1)
+            layer.draw(Text("+\(b.count)").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(ink), at: b.at, anchor: .center)
+            return
+        }
+        layer.stroke(shape, with: .color(ink.opacity(0.7)), lineWidth: 1)
         layer.draw(Text(Image(systemName: symbol)).font(.system(size: 8.5, weight: .bold)).foregroundStyle(ink), at: b.at, anchor: .center)
     }
 
     /// The map button under a click, if any.
     private func hitButton(_ point: CGPoint, _ layout: MapLayout) -> MapButton? {
-        mapButtons(layout, view).last { hypot($0.at.x - point.x, $0.at.y - point.y) <= MapButton.radius + 2 }
+        mapButtons(layout, view).last { abs($0.at.x - point.x) <= $0.width / 2 + 2 && abs($0.at.y - point.y) <= MapButton.radius + 2 }
     }
 
     private func press(_ b: MapButton) {
@@ -480,6 +760,8 @@ struct CanvasView: View {
             case (.details, let name?, _): session.selection = [name]; session.detailsRequests += 1
             case (.rename, let name?, _): renameText = name; renameTarget = name
             case (.expand, let name?, _): session.expand(name)
+            case (.fold, let name?, _): session.setFolded(name, true)
+            case (.unfold, let name?, _): session.setFolded(name, false)
             default: break
             }
         }
@@ -487,12 +769,22 @@ struct CanvasView: View {
 
 
     /// From the context or the user: the icon above the name, no card.
-    private func drawOpen(_ p: MapLayout.PlacedNode, _ node: Node, in ctx: inout GraphicsContext) {
+    private func drawOpen(_ p: MapLayout.PlacedNode, _ node: Node, detail: Detail, in ctx: inout GraphicsContext) {
         typealias M = MapLayout.Metrics
         let kind = node.note(kind: "kind")
         let cx = p.x + p.w / 2
         let iconY = p.y + p.anchorY
         let ink = IconTint.of(p.id.name).map(Theme.tint) ?? (kind == nil ? Theme.Map.branch(p.branch) ?? Theme.Map.secondary : Theme.kind(kind))
+        let nameY = p.y + M.openPadY + M.iconLine + M.iconGap + M.nameLine / 2
+        if detail == .shapes {
+            // Far out: a dot of the icon's colour, the name as a bar.
+            let d = M.iconBox - 8
+            ctx.fill(Path(ellipseIn: CGRect(x: cx - d / 2, y: iconY - d / 2, width: d, height: d)), with: .color(ink.opacity(0.85)))
+            for (i, line) in p.nameLines.enumerated() {
+                drawGreek(line, x: cx, y: nameY + Double(i) * M.nameLine, anchor: .center, maxWidth: p.w, ink: Theme.Map.primary, in: &ctx)
+            }
+            return
+        }
         let symbols = session.symbols(for: node)
         let stack = M.iconStack(symbols.count)
         drawStack(symbols, from: cx - stack / 2 + M.iconBox / 2, y: iconY, step: M.iconStep, disc: M.iconBox - 2,
@@ -505,11 +797,11 @@ struct CanvasView: View {
             ctx.draw(Text(Image(systemName: badge)).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.Map.tertiary),
                      at: CGPoint(x: cx + stack / 2 + 3, y: iconY - M.iconLine / 2 + 5), anchor: .center)
         }
-        let nameY = p.y + M.openPadY + M.iconLine + M.iconGap + M.nameLine / 2
         for (i, line) in p.nameLines.enumerated() {
             ctx.draw(Text(line).font(p.depth == 0 ? Theme.Map.rootName : Theme.Map.name).foregroundStyle(Theme.Map.primary),
                      at: CGPoint(x: cx, y: nameY + Double(i) * M.nameLine), anchor: .center)
         }
+        guard detail == .full else { return }
         for (i, note) in p.notes.enumerated() {
             let y = nameY + (Double(p.nameLines.count) - 0.5) * M.nameLine + (Double(i) + 0.5) * M.noteLine
             ctx.draw(noteText(note), at: CGPoint(x: cx, y: y), anchor: .center)
@@ -533,7 +825,7 @@ struct CanvasView: View {
     }
 
     /// The model's extras: a card in the colours of its provenance (world, guess, advice).
-    private func drawCard(_ p: MapLayout.PlacedNode, _ node: Node, rect: CGRect, src: String?, in ctx: inout GraphicsContext) {
+    private func drawCard(_ p: MapLayout.PlacedNode, _ node: Node, rect: CGRect, src: String?, detail: Detail, in ctx: inout GraphicsContext) {
         typealias M = MapLayout.Metrics
         let card = Path(roundedRect: rect, cornerRadius: Theme.Map.corner)
         let style = Theme.provenance(src)
@@ -548,6 +840,12 @@ struct CanvasView: View {
 
         let nameY = p.y + M.padY + M.nameLine / 2
         var x = p.x + M.padX
+        if detail == .shapes {
+            for (i, line) in p.nameLines.enumerated() {
+                drawGreek(line, x: x, y: nameY + Double(i) * M.nameLine, anchor: .leading, maxWidth: p.w - 2 * M.padX, ink: Theme.Map.primary, in: &ctx)
+            }
+            return
+        }
         if p.glyph {
             let kind = node.note(kind: "kind")
             let symbols = Array(session.symbols(for: node).prefix(M.maxIcons))
@@ -564,6 +862,7 @@ struct CanvasView: View {
             ctx.draw(Text(Image(systemName: badge)).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(colours.ink),
                      at: CGPoint(x: p.x + p.w - M.padX - M.badge / 2 + 3, y: nameY), anchor: .center)
         }
+        guard detail == .full else { return }
         for (i, note) in p.notes.enumerated() {
             let y = p.y + M.padY + Double(p.nameLines.count) * M.nameLine + (Double(i) + 0.5) * M.noteLine
             ctx.draw(noteText(note), at: CGPoint(x: p.x + M.padX, y: y), anchor: .leading)
@@ -579,7 +878,18 @@ struct CanvasView: View {
         return Text(note).font(Theme.Map.note).foregroundStyle(Theme.Map.secondary)
     }
 
-    private func drawEdge(_ e: MapLayout.PlacedEdge, _ edge: Edge?, lit: Bool, in ctx: inout GraphicsContext) {
+    /// A tree's links are heavier near its root and taper toward its leaves, so the main
+    /// branches read first; cross-links stay hairlines.
+    static func linkWidth(tree: Bool, depth: Int) -> CGFloat {
+        guard tree else { return 1 }
+        switch depth {
+        case ...1: return 2.25
+        case 2: return 1.6
+        default: return 1.25
+        }
+    }
+
+    private func drawEdge(_ e: MapLayout.PlacedEdge, _ edge: Edge?, depth: Int, lit: Bool, in ctx: inout GraphicsContext) {
         var path = Path()
         path.move(to: CGPoint(e.p0))
         path.addCurve(to: CGPoint(e.p3), control1: CGPoint(e.p1), control2: CGPoint(e.p2))
@@ -587,8 +897,11 @@ struct CanvasView: View {
         let selected = session.selectedEdge == e.key
         let colour = selected ? Theme.accent : Theme.Map.branch(e.branch) ?? Theme.Map.tertiary
         let dash: [CGFloat] = src == "guess" ? [2, 3] : src == "world" ? [6, 4] : e.tree ? [] : [5, 4]
-        let width: CGFloat = (e.tree ? 1.25 : 1) + (lit || selected ? 0.5 : 0)
+        let width: CGFloat = Self.linkWidth(tree: e.tree, depth: depth) + (lit || selected ? 0.75 : 0)
         if src == "guess" { ctx.opacity *= 0.75 }
+        if selected {
+            ctx.stroke(path, with: .color(Theme.accent.opacity(0.2)), style: StrokeStyle(lineWidth: width + 6, lineCap: .round))
+        }
         if session.viewingTurn == nil, session.review.edges.contains(e.key) {
             ctx.stroke(path, with: .color(Theme.accent.opacity(0.25)), style: StrokeStyle(lineWidth: width + 5, lineCap: .round))
         }
@@ -689,6 +1002,8 @@ struct CanvasView: View {
                 } else if let d = draggingNode {
                     if let c = session.displayedLayout.pinnedCenter(d.name, dx: d.offset.width / view.k, dy: d.offset.height / view.k) {
                         touched = true
+                        // It is already where it was dropped: no glide back from where it was.
+                        morphFrom = session.displayedLayout.moving(d.name, dx: d.offset.width / view.k, dy: d.offset.height / view.k)
                         session.dispatch(.pin(d.name, x: c.x, y: c.y))
                     }
                     draggingNode = nil
@@ -737,6 +1052,9 @@ struct CanvasView: View {
                 if session.iconChoices(for: name).isEmpty && session.icons.entries.isEmpty { Text("No icon matches this name") }
             }
             if session.layout[name]?.pinned == true { Button("Release pin") { session.dispatch(.release(name)) } }
+            if let p = session.layout[name], p.childCount > 0 {
+                Button(p.hiddenCount > 0 ? "Open branch (\(p.hiddenCount) hidden)" : "Fold branch") { session.toggleFold(name) }
+            }
             Button("Show details") { session.selection = [name]; session.detailsRequests += 1 }
             Button("Copy name") { Clipboard.copy(name) }
             Divider()
@@ -768,6 +1086,9 @@ struct CanvasView: View {
         } else {
             Button("Fit map") { refit() }
             Button("Fill the view") { fillView() }
+            Button("Find on the map…") { openFind() }
+            if !session.ui.collapsed.isEmpty { Button("Open every branch") { session.unfoldAll() } }
+            Button(minimapOn ? "Hide the overview" : "Show the overview") { minimapOn.toggle() }
             if session.layout.nodes.contains(where: \.pinned) {
                 Button("Release all pins") {
                     for p in session.layout.nodes where p.pinned { session.dispatch(.release(p.id.name)) }
@@ -804,20 +1125,163 @@ struct Glide: Equatable {
     let start: Date
 }
 
+/// The map gliding from the layout it had to the one it has now (`MapLayout.morphed`).
+struct Morph: Equatable {
+    let from: MapLayout
+    /// Nodes the old layout did not have: they fade in as they grow out of their parents.
+    let arrivals: Set<String>
+    let start: Date
+    static let duration: TimeInterval = 0.42
+    /// Past this many nodes the map changes at once: a glide would stutter.
+    static let maxNodes = 1500
+
+    /// How far along at `date`, eased out (quick at first, settling gently).
+    func progress(at date: Date) -> Double {
+        let x = min(1, max(0, date.timeIntervalSince(start) / Self.duration))
+        return 1 - pow(1 - x, 3)
+    }
+}
+
+/// What the canvas marks as it draws: nodes fading in, and Find on the map's matches (the
+/// rest of the map dims while there are some).
+struct Marks {
+    var arrivals: Set<String> = []
+    var fade: Double = 1
+    var found: Set<String> = []
+    var current: String?
+
+    /// How opaque a node (or a link between two) is drawn.
+    func opacity(_ names: String...) -> Double {
+        var o = 1.0
+        if names.contains(where: { arrivals.contains($0) }) { o *= fade }
+        if !found.isEmpty, !names.contains(where: { found.contains($0) }) { o *= 0.25 }
+        return o
+    }
+}
+
+/// How much the canvas draws at a zoom: everything; names without notes or link labels
+/// (too small to read); or, far out, shapes alone with the trees' main names over them.
+enum Detail {
+    case full, names, shapes
+
+    init(zoom k: CGFloat) {
+        self = k >= 0.5 ? .full : k >= 0.28 ? .names : .shapes
+    }
+}
+
+/// Find on the map (⌘F), at the bottom of the map: matches light up as you type (the rest
+/// dims), ↩ goes to the next, ⇧↩ to the one before, esc closes it.
+struct FindBar: View {
+    @Binding var text: String
+    let count: Int
+    let index: Int
+    let step: (Int) -> Void
+    let close: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find on the map", text: $text)
+                .textFieldStyle(.plain)
+                .font(Theme.body)
+                .frame(width: 220)
+                .focused($focused)
+                .onSubmit { step(NSEvent.modifierFlags.contains(.shift) ? -1 : 1) }
+                .onKeyPress(.escape) { close(); return .handled }
+            if !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                Text(count == 0 ? "No match" : "\(index + 1) of \(count)")
+                    .font(Theme.caption).monospacedDigit()
+                    .foregroundStyle(count == 0 ? Color.orange : Color.secondary)
+                    .fixedSize()
+                    .contentTransition(.numericText())
+            }
+            MapToolButton(symbol: "chevron.up", help: "Previous match (⇧↩)") { step(-1) }.disabled(count < 2)
+            MapToolButton(symbol: "chevron.down", help: "Next match (↩)") { step(1) }.disabled(count < 2)
+            MapToolButton(symbol: "xmark", help: "Close (esc)", action: close)
+        }
+        .padding(.leading, Theme.Space.m - 4)
+        .padding(.trailing, Theme.Space.xs)
+        .padding(.vertical, 3)
+        .floatingBar(in: Capsule())
+        .shieldsMapScroll()
+        .onAppear { focused = true }
+    }
+}
+
+/// The whole map, small, in the bottom right corner, with the part on screen outlined in
+/// the accent: click or drag on it to go there.
+struct Minimap: View {
+    let layout: MapLayout
+    let view: Viewport
+    let viewSize: CGSize
+    /// Centres the view on a map point (gliding unless dragged).
+    let go: (MapLayout.Point, Bool) -> Void
+    /// The most room it takes, and the margin inside it.
+    static let roomWidth = 180.0, roomHeight = 120.0, pad = 8.0
+
+    var body: some View {
+        let w = max(1, layout.width), h = max(1, layout.height)
+        let scale = min(Self.roomWidth / w, Self.roomHeight / h)
+        let width = max(48, w * scale) + 2 * Self.pad, height = max(32, h * scale) + 2 * Self.pad
+        let size = CGSize(width: width, height: height)
+        // Map points to the minimap's, and back.
+        let ox = (width - w * scale) / 2 - layout.minX * scale
+        let oy = (height - h * scale) / 2 - layout.minY * scale
+        Canvas { ctx, _ in
+            for e in layout.edges where e.tree {
+                var path = Path()
+                path.move(to: CGPoint(x: e.p0.x * scale + ox, y: e.p0.y * scale + oy))
+                path.addCurve(to: CGPoint(x: e.p3.x * scale + ox, y: e.p3.y * scale + oy),
+                              control1: CGPoint(x: e.p1.x * scale + ox, y: e.p1.y * scale + oy),
+                              control2: CGPoint(x: e.p2.x * scale + ox, y: e.p2.y * scale + oy))
+                ctx.stroke(path, with: .color((Theme.Map.branch(e.branch) ?? Theme.Map.tertiary).opacity(0.55)), lineWidth: 0.75)
+            }
+            for p in layout.nodes {
+                let r = CGRect(x: p.x * scale + ox, y: p.y * scale + oy, width: max(2, p.w * scale), height: max(2, p.h * scale))
+                let ink = Theme.Map.branch(p.branch) ?? Theme.Map.secondary
+                ctx.fill(Path(roundedRect: r, cornerRadius: min(2, r.height / 2)), with: .color(ink.opacity(p.depth == 0 ? 0.9 : 0.6)))
+            }
+            // What is on screen.
+            let a = view.map(.zero), b = view.map(CGPoint(x: viewSize.width, y: viewSize.height))
+            let seen = CGRect(x: a.x * scale + ox, y: a.y * scale + oy, width: (b.x - a.x) * scale, height: (b.y - a.y) * scale)
+                .intersection(CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1))
+            if !seen.isNull {
+                ctx.fill(Path(roundedRect: seen, cornerRadius: 3), with: .color(Theme.accent.opacity(0.1)))
+                ctx.stroke(Path(roundedRect: seen, cornerRadius: 3), with: .color(Theme.accent), lineWidth: 1.25)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusSmall + 2))
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                let moved = hypot(g.translation.width, g.translation.height) > 2
+                go(MapLayout.Point(x: (Double(g.location.x) - ox) / scale, y: (Double(g.location.y) - oy) / scale), !moved)
+            })
+        .help("The whole map: click or drag to go there (M hides it)")
+        .accessibilityElement()
+        .accessibilityLabel("Overview of the map")
+        .accessibilityHint("Click to move the view there")
+    }
+}
+
 extension CGPoint {
     init(_ p: MapLayout.Point) { self.init(x: p.x, y: p.y) }
 }
 
 /// Zoom in, zoom out, fit and fill: a small bar in the bottom right corner.
 struct ZoomBar: View {
-    /// Four 28 pt buttons, 2 pt apart, in 3 pt of padding: 4 × 28 + 3 × 2 + 2 × 3.
+    /// Five 28 pt buttons, 2 pt apart, in 3 pt of padding: 5 × 28 + 4 × 2 + 2 × 3.
     static let width: CGFloat = 34
-    static let height: CGFloat = 124
+    static let height: CGFloat = 154
     let zoomIn: () -> Void
     let zoomOut: () -> Void
     let fit: () -> Void
     let fill: () -> Void
     var filling = false
+    /// The overview in the corner is wanted (it shows while some of the map is out of view).
+    @Binding var minimap: Bool
 
     var body: some View {
         VStack(spacing: 2) {
@@ -826,6 +1290,8 @@ struct ZoomBar: View {
             MapToolButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Fit the map (0)", action: fit)
             MapToolButton(symbol: "wand.and.stars", help: filling ? "Stop filling the view here (F)" : "Fill the view: nodes move into the room around them until the map can zoom in no further (F; undo puts them back)",
                           pressed: filling, action: fill)
+            MapToolButton(symbol: "map", help: minimap ? "Hide the overview of the whole map (M)" : "Show an overview of the whole map while some of it is out of view (M)",
+                          pressed: minimap) { withAnimation(Theme.slide) { minimap.toggle() } }
         }
         .padding(3)
         .floatingBar(in: RoundedRectangle(cornerRadius: Theme.radiusLarge - 2))

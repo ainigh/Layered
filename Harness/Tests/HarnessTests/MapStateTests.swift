@@ -87,6 +87,19 @@ final class MapStateTests: XCTestCase {
         XCTAssertNil(Position(noteValue: "auto"))
     }
 
+    func testANodeMovedLeftOfTheOriginKeepsItsPlace() {
+        // `@pos -35,…` would read as an edge (` -`): a negative x is written with a minus sign.
+        XCTAssertEqual(Position(x: -35, y: -516).noteValue, "\u{2212}35,-516")
+        XCTAssertEqual(Position(noteValue: "\u{2212}35,-516"), Position(x: -35, y: -516))
+        XCTAssertEqual(Position(noteValue: "-35,516"), Position(x: -35, y: 516))
+        var state = reduce(MapState(), .applyLines(["| hub - has | child"], what: "seed"), now: fixedDate)
+        state = reduce(state, .arrange(["hub": Position(x: -35, y: 516), "child": Position(x: -0.5, y: 2)]), now: fixedDate)
+        XCTAssertEqual(state.graph.node("hub")?.note(kind: "pos").flatMap(Position.init(noteValue:)), Position(x: -35, y: 516))
+        XCTAssertEqual(state.graph.node("child")?.note(kind: "pos").flatMap(Position.init(noteValue:)), Position(x: -0.5, y: 2))
+        state = reduce(state, .pin("hub", x: -120, y: 40), now: fixedDate)
+        XCTAssertEqual(state.graph.node("hub")?.note(kind: "pos").flatMap(Position.init(noteValue:)), Position(x: -120, y: 40))
+    }
+
     func testCommentThatLooksLikeAStatementStaysAComment() throws {
         var state = reduce(MapState(), .applyLines(["| ana @src user"], what: "x"), now: fixedDate)
         state = reduce(state, .comment(on: "ana", "| not a statement"), now: fixedDate)

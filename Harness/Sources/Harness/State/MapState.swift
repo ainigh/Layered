@@ -442,14 +442,20 @@ public struct Position: Equatable, Sendable {
     }
 
     public init?(noteValue: String) {
-        let parts = noteValue.split(separator: ",")
+        let parts = noteValue.replacingOccurrences(of: Self.minus, with: "-").split(separator: ",")
         guard parts.count == 2, let x = Double(parts[0].trimmingCharacters(in: .whitespaces)), let y = Double(parts[1].trimmingCharacters(in: .whitespaces)),
               // Somewhere on a map: not `nan`, `inf`, or so far out the canvas cannot place it.
               x.isFinite, y.isFinite, abs(x) < Self.limit, abs(y) < Self.limit else { return nil }
         self.init(x: x, y: y)
     }
 
-    public var noteValue: String { "\(Position.plain(x)),\(Position.plain(y))" }
+    /// A negative x is written with a minus sign (−), not a hyphen: right after the note's
+    /// space a hyphen is the notation's `-`, which would break the line. Either is read back.
+    public var noteValue: String {
+        "\(Position.plain(x).replacingOccurrences(of: "-", with: Self.minus)),\(Position.plain(y))"
+    }
+
+    static let minus = "\u{2212}"
 
     /// The farthest a position can be from the origin, in map points.
     static let limit = 1e9

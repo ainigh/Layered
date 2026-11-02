@@ -1538,6 +1538,18 @@ struct HoverCard: View {
     /// How many nodes its fold hides (0: not folded).
     var hidden = 0
 
+    /// Kind, provenance, pin, links and fold, as the card's second line.
+    private func hoverFacts(kind: String?) -> [String] {
+        var facts: [String] = []
+        if let kind { facts.append(kind) }
+        if let src = node.note(kind: "src") { facts.append("from " + src) }
+        if pinned { facts.append("pinned") }
+        let degree = graph.degree(of: node.id)
+        facts.append(degree == 1 ? "1 link" : "\(degree) links")
+        if hidden > 0 { facts.append("\(hidden) folded away") }
+        return facts
+    }
+
     var body: some View {
         let kind = node.note(kind: "kind")
         let notes = MapLayout.shownNotes(node)
@@ -1547,9 +1559,7 @@ struct HoverCard: View {
                 Image(systemName: IconManifest.fallbackSymbol(kind: kind)).foregroundStyle(Theme.kind(kind)).font(Theme.caption)
                 Text(node.id.name).font(Theme.label).lineLimit(3)
             }
-            let degree = graph.degree(of: node.id)
-            let facts = [kind, node.note(kind: "src").map { "from \($0)" }, pinned ? "pinned" : nil, degree == 1 ? "1 link" : "\(degree) links",
-                         hidden > 0 ? "\(hidden) folded away" : nil].compactMap { $0 }
+            let facts = hoverFacts(kind: kind)
             Text(facts.joined(separator: " · ")).font(Theme.caption).foregroundStyle(.secondary)
             if !notes.isEmpty || !comments.isEmpty {
                 Divider()

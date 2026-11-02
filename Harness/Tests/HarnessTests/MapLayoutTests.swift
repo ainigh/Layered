@@ -286,4 +286,15 @@ final class MapLayoutTests: XCTestCase {
         ]
         for c in cases { XCTAssertEqual(map.search(c.query, in: graph), c.found, "“\(c.query)”") }
     }
+
+    func testFoldedNodesAreSkippedByTheArrowsButFoundBySearch() throws {
+        let graph = try Compiler.compile("| hub - has | a\n| hub - has | b\n| a - has | c")
+        let map = MapLayout.compute(graph, collapsed: ["a"])
+        XCTAssertNil(map.neighbour(of: "a", .right), "nothing shown to the right of a folded node")
+        XCTAssertEqual(map.neighbour(of: "b", .up), "a")
+        XCTAssertEqual(map.search("c", in: graph), ["c"], "a folded-away match is still found")
+        XCTAssertEqual(map.foldedUnder["c"], "a")
+        XCTAssertEqual(map.children["a"], nil)
+        XCTAssertEqual(map["a"]?.childCount, 1)
+    }
 }

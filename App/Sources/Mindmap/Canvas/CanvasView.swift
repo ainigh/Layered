@@ -68,7 +68,8 @@ struct CanvasView: View {
     @State private var findIndex = 0
     /// The overview in the bottom right, while some of the map is out of view.
     @AppStorage("map.minimap") private var minimapOn = true
-    private let tick = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    /// Redraws while a new node's glow fades (only then: see `onReceive`).
+    private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         let graph = session.displayedGraph

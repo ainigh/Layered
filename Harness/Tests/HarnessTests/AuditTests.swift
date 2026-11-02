@@ -140,4 +140,16 @@ final class AuditTests: XCTestCase {
             XCTAssertEqual(Set(again.edges.keys), Set(g.edges.keys), src)
         }
     }
+
+    func testEveryCommentCanBeUndone() {
+        for text in ["see - later", "a = b", "ping @sam", "x | y", "plain words"] {
+            var s = reduce(MapState(), .applyLines(["| a"], what: "t"), now: fixedDate)
+            s = reduce(s, .comment(on: "a", text), now: fixedDate)
+            XCTAssertEqual(Outline.comments(attachedTo: "a", in: s.graph).count, 1, text)
+            XCTAssertEqual(Outline.comments(attachedTo: "a", in: s.graph).first == text, !"-=@|".contains(where: text.contains), text)
+            s = reduce(s, .undo, now: fixedDate)
+            XCTAssertEqual(s.graph.comments.filter { !$0.isTurnHeader }.map(\.text), [], text)
+            XCTAssertTrue(s.errors.isEmpty, "\(text): \(s.errors)")
+        }
+    }
 }

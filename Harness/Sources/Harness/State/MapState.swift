@@ -355,7 +355,7 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
     case .comment(let name, let text):
         guard state.graph.node(name) != nil, !Text.collapse(text).isEmpty else { break }
         // A comment cannot start with `|` (a statement) or `#` (a heading).
-        let body = Text.collapse(Text.collapse(text).drop { $0 == "|" || $0 == "#" || $0 == " " })
+        let body = deletableComment(Text.collapse(Text.collapse(text).drop { $0 == "|" || $0 == "#" || $0 == " " }))
         guard !body.isEmpty else { break }
         state.appendTurn(who: "user", what: "comment \(name)", lines: ["| \(name)", body], now: now)
 
@@ -401,7 +401,8 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
     case .merge(let proposal):
         guard state.graph.node(proposal.old) != nil, proposal.old != proposal.new else { break }
         var lines = [Render.edit(Edit(old: Name(proposal.old), new: Name(proposal.new)))]
-        if !proposal.reason.isEmpty { lines.append(proposal.reason) }
+        let reason = deletableComment(Text.collapse(proposal.reason.drop { $0 == "|" || $0 == "#" || $0 == " " }))
+        if !reason.isEmpty { lines.append(reason) }
         state.appendTurn(who: "user", what: "merge \(proposal.old)", lines: lines, now: now)
 
     case .forgetText(let n):
@@ -410,6 +411,22 @@ public func reduce(_ state: MapState, _ action: Action, now: Date) -> MapState {
         state.appendTurn(who: "user", what: "forget text \(n)", lines: doomed.map { "| \($0.name) =" }, now: now)
     }
     return state
+}
+
+/// A comment Undo can take away again: it is deleted with `| text =`, so text that line could
+/// not carry (` - `, `=`, `@`, `|`) is written with look-alikes (– ＝ ＠ ｜). Empty when even
+/// that does not parse.
+func deletableComment(_ text: String) -> String {
+    func deletes(_ t: String) -> Bool {
+        guard !t.isEmpty, case .statement(.edit(let e))? = try? Parser(options: .base).parseLine("| \(t) =") else { return false }
+        return e.old.text == t && e.new == nil
+    }
+    if deletes(text) { return text }
+    var safe = text.replacingOccurrences(of: "|", with: "｜").replacingOccurrences(of: "=", with: "＝").replacingOccurrences(of: "@", with: "＠")
+    safe = safe.replacingOccurrences(of: " -", with: " –").replacingOccurrences(of: "- ", with: "– ")
+    if safe.hasPrefix("-") { safe = "–" + safe.dropFirst() }
+    if safe.hasSuffix("-") { safe = safe.dropLast() + "–" }
+    return deletes(safe) ? safe : ""
 }
 
 /// A pinned canvas position. Written as `@pos 120,-340`: the comma keeps a negative

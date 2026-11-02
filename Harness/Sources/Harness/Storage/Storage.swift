@@ -218,7 +218,7 @@ public final class InMemoryStorage: MapStorage, @unchecked Sendable {
 /// A plain folder: readable, diffable and syncable without the app.
 public struct FolderStorage: MapStorage {
     public let root: URL
-    private let fm = FileManager.default
+    private var fm: FileManager { .default }
 
     public init(root: URL) throws {
         self.root = root

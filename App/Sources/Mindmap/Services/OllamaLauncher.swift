@@ -3,21 +3,29 @@ import AppKit
 import Harness
 
 /// Starts `ollama serve` as a helper if Ollama is installed and not already running.
+@MainActor
 final class OllamaLauncher {
-    private var process: Process?
+    /// Set on the main actor; read only by deinit, when nothing else holds the launcher.
+    nonisolated(unsafe) private var process: Process?
 
     func startIfInstalled(host: URL = URL(string: "http://localhost:11434")!) {
-        Task.detached { [weak self] in
-            if await OllamaClient(host: host).ping() { return }
-            guard let path = ["/usr/local/bin/ollama", "/opt/homebrew/bin/ollama", "/Applications/Ollama.app/Contents/Resources/ollama"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return }
+        Task { [weak self] in
+            guard let path = await Self.serveable(host: host) else { return }
             let p = Process()
             p.executableURL = URL(fileURLWithPath: path)
             p.arguments = ["serve"]
             p.standardOutput = FileHandle.nullDevice
             p.standardError = FileHandle.nullDevice
             try? p.run()
-            await MainActor.run { self?.process = p }
+            self?.process = p
         }
+    }
+
+    /// Ollama's binary, when it is installed and nothing answers at `host` yet (off the main actor).
+    nonisolated private static func serveable(host: URL) async -> String? {
+        if await OllamaClient(host: host).ping() { return nil }
+        return ["/usr/local/bin/ollama", "/opt/homebrew/bin/ollama", "/Applications/Ollama.app/Contents/Resources/ollama"]
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) })
     }
 
     deinit { process?.terminate() }

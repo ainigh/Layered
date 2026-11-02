@@ -125,12 +125,15 @@ final class AppModel {
         }
         // Closing the window puts the app back in the menu bar only (no Dock icon).
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
-            guard (note.object as? NSWindow).map(Self.isMainWindow) == true else { return }
-            MainActor.assumeIsolated { _ = NSApp.setActivationPolicy(.accessory) }
+            // Delivered on the main queue, so on the main actor.
+            MainActor.assumeIsolated {
+                guard let window = note.object as? NSWindow, Self.isMainWindow(window) else { return }
+                _ = NSApp.setActivationPolicy(.accessory)
+            }
         }
     }
 
-    nonisolated static func isMainWindow(_ window: NSWindow) -> Bool {
+    static func isMainWindow(_ window: NSWindow) -> Bool {
         window.identifier?.rawValue.hasPrefix("main") == true
     }
 

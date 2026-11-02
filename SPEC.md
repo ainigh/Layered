@@ -560,3 +560,9 @@ Every request to Ollama goes with `"think": false`, so a thinking model (qwen3, 
 **Weight.** A tree's links are heavier near its root and taper toward its leaves (2.25 pt from a root, 1.6 pt at the next level, then 1.25 pt); cross-links stay 1 pt hairlines. This replaces “1.25 pt in a tree” in **Canvas** above. A tree's root (an open node with children) sits on a faint plate; the hovered node is lit on one; the selected link glows; a new node's highlight fades out instead of switching off.
 
 **Undo in text boxes.** ⌘Z and ⇧⌘Z in a text box undo the typing; elsewhere they undo the map, as before.
+
+**Keys on the map (?).** **?** on the map (or **Keys on the map** in its right-click menu) opens a card listing every key and gesture the map answers to; esc closes it. The empty map points to it.
+
+**Hand work shows where it goes.** A dragged node lifts on a shadow and leaves a dashed ghost where it was; ⌥-dragging a link rings the node it would join and ends there in an arrow; a box being drawn lights what it will select. A link lights up under the pointer; arrowheads grow with their line. The SVG export draws the same tapered links, root plates and folded **+n**.
+
+**From a panel to the map.** Picking a node in Outline, or a linked node in Details, selects it and brings it into view, opening any fold that hides it. Details shows where the node hangs in its tree (root › … › node), each step a link there, and **Fold branch** / **Open branch** for a node with children; the hover card says how many nodes a fold hides.

@@ -224,9 +224,9 @@ public struct Gate: Sendable {
                 let candidates = options.textID.map { evidence.sentences(text: $0) } ?? evidence.sentences
                 if let found = candidates.first(where: { supports($0, names: names, required: required) }) {
                     proof = found
-                    reasons.append(cited == nil ? "found proof in \(found.proofNote)" : "sentence \(cited!) does not name \(describe(required ?? names)); using \(found.proofNote)")
+                    reasons.append(cited == nil ? "found proof in \(found.proofNote)" : "sentence \(cited!) does not name \(describe(required ?? names, any: required == nil)); using \(found.proofNote)")
                 } else {
-                    reasons.append("no sentence names \(describe(required ?? names)); downgraded to `guess`")
+                    reasons.append("no sentence names \(describe(required ?? names, any: required == nil)); downgraded to `guess`")
                     provenance = .guess
                 }
             }
@@ -295,8 +295,9 @@ public struct Gate: Sendable {
         }
     }
 
-    private func describe(_ names: [String]) -> String {
-        names.map { "`\($0)`" }.joined(separator: " and ")
+    /// `a` and `b` when a sentence needs both; `a` or `b` when either one is proof.
+    private func describe(_ names: [String], any: Bool = false) -> String {
+        names.map { "`\($0)`" }.joined(separator: any ? " or " : " and ")
     }
 
     static func matchable(_ s: String) -> String {
@@ -362,6 +363,8 @@ public struct GateSession: Sendable {
 
         var reasons: [String] = []
         let emitted: [String]
+        // Names this line makes known, once it is kept (a line held back adds none).
+        var nextKnown: Set<String>?
         switch statement {
         case .edit(let edit):
             guard let lines = gate.gateEdit(edit, known: known, graph: scratch, reasons: &reasons) else {
@@ -379,7 +382,7 @@ public struct GateSession: Sendable {
                 result.events.append(GateEvent(kind: .dropped, raw: raw, reason: reasons.joined(separator: "; ")))
                 return []
             }
-            known = trialKnown
+            nextKnown = trialKnown
             emitted = lines
         }
 
@@ -394,6 +397,7 @@ public struct GateSession: Sendable {
         }
         if Canonical.render(trial) == before {
             if options.keepDuplicates {
+                if let nextKnown { known = nextKnown }
                 result.lines += emitted
                 return emitted
             }
@@ -409,6 +413,7 @@ public struct GateSession: Sendable {
         }
 
         scratch = trial
+        if let nextKnown { known = nextKnown }
         // A merge or delete takes names off the map: later lines must not find them there.
         if case .edit = statement { known = Set(scratch.rootNames) }
         appended += 1

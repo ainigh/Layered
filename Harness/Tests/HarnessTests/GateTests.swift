@@ -65,7 +65,7 @@ final class GateTests: XCTestCase {
             Case(name: "an edge between existing nodes needs one of them in the sentence",
                  input: "| budget - limits | the paper @s 3",
                  lines: ["| budget - limits @src guess | the paper"],
-                 rewritten: ["no sentence names `budget` and `the paper`; downgraded"]),
+                 rewritten: ["no sentence names `budget` or `the paper`; downgraded"]),
             Case(name: "a new node named in the cited sentence is proof enough",
                  input: "| sam - fears | deadline @s 3",
                  lines: ["| deadline @src text @text 1 s3", "| sam - fears @src text @text 1 s3 | deadline"],

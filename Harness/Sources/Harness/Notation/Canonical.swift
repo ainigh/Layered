@@ -34,6 +34,31 @@ public enum Canonical {
 
         let edgesHere = graph.edges.values.filter { emittingScope($0) == scope }
 
+        // Indexed once, so a large map renders in time linear in its size (the gate renders
+        // it twice for every line the model writes).
+        var degree: [NodeID: Int] = [:]
+        for e in graph.edges.values {
+            degree[e.a, default: 0] += 1
+            if e.b != e.a { degree[e.b, default: 0] += 1 }
+        }
+        var onNode: [NodeID: [String]] = [:], onEdge: [EdgeKey: [String]] = [:]
+        for c in comments {
+            switch c.attachedTo {
+            case .node(let id): onNode[id, default: []].append(c.text)
+            case .edge(let key): onEdge[key, default: []].append(c.text)
+            case nil: break
+            }
+        }
+        var nodesUnder: [[String]: [(NodeID, Node)]] = [:]
+        for (id, node) in graph.nodes where id.scope == scope { nodesUnder[node.heading, default: []].append((id, node)) }
+        var edgesUnder: [[String]: [Edge]] = [:]
+        for edge in edgesHere {
+            let (from, to) = emittingOrder(edge)
+            let owner = from.scope == scope ? from : to
+            guard let heading = graph.nodes[owner]?.heading else { continue }
+            edgesUnder[heading, default: []].append(edge)
+        }
+
         for heading in headings {
             if !heading.isEmpty {
                 out.append(String(repeating: "#", count: heading.count) + " " + heading[heading.count - 1])
@@ -43,9 +68,9 @@ public enum Canonical {
             }
 
             var keyed: [(String, Int, String, [String])] = []
-            for (id, node) in graph.nodes where id.scope == scope && node.heading == heading {
-                let attached = comments.filter { $0.attachedTo == .node(id) }.map(\.text)
-                let isolated = node.notes.isEmpty && graph.degree(of: id) == 0
+            for (id, node) in nodesUnder[heading] ?? [] {
+                let attached = onNode[id] ?? []
+                let isolated = node.notes.isEmpty && degree[id, default: 0] == 0
                 if isolated || !attached.isEmpty {
                     keyed.append((id.name, 0, "", ["| \(id.name)"] + attached))
                 }
@@ -53,11 +78,9 @@ public enum Canonical {
                     keyed.append((id.name, 1, note, ["| \(id.name) @\(note)"]))
                 }
             }
-            for edge in edgesHere {
+            for edge in edgesUnder[heading] ?? [] {
                 let (from, to) = emittingOrder(edge)
-                let owner = from.scope == scope ? from : to
-                guard graph.nodes[owner]?.heading == heading else { continue }
-                let attached = comments.filter { $0.attachedTo == .edge(edge.key) }.map(\.text)
+                let attached = onEdge[edge.key] ?? []
                 keyed.append((from.name, 2, to.description, [Render.edge(edge, from: from, to: to, scope: scope)] + attached))
                 if edge.isTwoWay {
                     keyed.append((to.name, 2, from.description, [Render.bareEdge(from: to, to: from, scope: scope)]))

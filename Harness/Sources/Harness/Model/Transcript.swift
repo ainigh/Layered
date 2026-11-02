@@ -128,7 +128,9 @@ public struct SpeakerMap: Equatable, Sendable {
 
     /// `Speaker 1 is Ana` → ("speaker 1", "ana")
     public static func parse(_ body: String) -> (String, String)? {
-        let lower = Text.collapse(body).lowercased()
+        var lower = Text.collapse(body).lowercased()
+        // An answer keeps its question after it: `Speaker 1 is Ana (s1: Who is Speaker 1?)`.
+        if let r = lower.range(of: #" \(s\d+: .*\)$"#, options: .regularExpression) { lower.removeSubrange(r) }
         guard lower.hasPrefix("speaker "), let range = lower.range(of: " is ") else { return nil }
         let label = String(lower[..<range.lowerBound])
         let name = Canonicaliser.canonical(String(lower[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: ".")))

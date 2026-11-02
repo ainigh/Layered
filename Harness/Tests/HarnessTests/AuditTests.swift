@@ -86,4 +86,49 @@ final class AuditTests: XCTestCase {
         let set = PromptSet(overrides: [.chat: "C:{context}|I:{item}|M:{map}"])
         XCTAssertEqual(set.render(.chat, map: "", context: "use {item} here", nodes: [], item: "X {map}"), "C:use {item} here|I:X {map}|M:(empty)")
     }
+
+    func testANameHeldBackOverBudgetIsStillNewToLaterLines() {
+        let r = Gate.run("| a @src world\n| b @src world\n| a - x | b @src world", graph: Graph(), evidence: EvidenceStore(),
+                         options: GateOptions(prompt: .chat, budget: 1))
+        XCTAssertEqual(r.lines, ["| a @src world"])
+        XCTAssertEqual(r.deferred.count, 2)
+        // The link's deferred lines still declare `b`, which is not on the map.
+        XCTAssertTrue(r.deferred.last?.contains("| b @src world") == true, "\(r.deferred)")
+    }
+
+    func testALargeMapRendersInLinearTime() {
+        var g = Graph()
+        for i in 0...4000 { g.nodes[n("n\(i)")] = Node(id: n("n\(i)")) }
+        for i in 0..<4000 { g.addEdge(from: n("n\(i)"), to: n("n\(i + 1)"), directed: true) }
+        let start = Date()
+        let text = Canonical.render(g)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.5)
+        XCTAssertEqual(try Compiler.compile(text).edges.count, 4000)
+    }
+
+    func testASpeakerAnswerKeepsItsQuestionOutOfTheName() {
+        XCTAssertEqual(SpeakerMap.parse("Speaker 1 is Ana (s1: Who is Speaker 1?)")?.1, "ana")
+        XCTAssertEqual(SpeakerMap.parse("Speaker 2 is Ana.")?.1, "ana")
+    }
+
+    func testDuplicatesAmongManyNamesAreQuick() {
+        // Varied names, as a map has: letters drawn from a fixed sequence, 4 to 15 long.
+        var seed: UInt64 = 7
+        func letter() -> Character {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Character(Unicode.Scalar(UInt8(97 + (seed >> 33) % 26)))
+        }
+        let names = (0..<1500).map { i in String((0..<(4 + i % 12)).map { _ in letter() }) }
+        let start = Date()
+        _ = Canonicaliser.likelyDuplicates(in: names)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        // The banded check agrees with the full edit distance.
+        let words = ["kitten", "sitting", "mitten", "kitchen", "paper", "papers", "pager", "", "ab", "ba", "abc"]
+        for a in words {
+            for b in words {
+                XCTAssertEqual(Canonicaliser.within(Array(a.unicodeScalars), Array(b.unicodeScalars), 2), Canonicaliser.editDistance(a, b) <= 2, "\(a) \(b)")
+            }
+        }
+        XCTAssertEqual(Canonicaliser.likelyDuplicates(in: ["papers", "paper", "dragon"]).map(\.2), ["same normal form"])
+    }
 }

@@ -69,6 +69,31 @@ public enum Canonicaliser {
         return Resolution(name: canon, existing: false, reason: canon == raw ? nil : "normalised `\(raw)` to `\(canon)`")
     }
 
+    /// Are `a` and `b` at most `limit` edits apart? Only the diagonal band the answer can lie
+    /// in is computed, and it stops as soon as every way through is over the limit.
+    static func within(_ a: [Unicode.Scalar], _ b: [Unicode.Scalar], _ limit: Int) -> Bool {
+        if abs(a.count - b.count) > limit { return false }
+        if a.isEmpty || b.isEmpty { return max(a.count, b.count) <= limit }
+        let over = limit + 1
+        var previous = (0...b.count).map { min($0, over) }
+        var current = [Int](repeating: over, count: b.count + 1)
+        for i in 1...a.count {
+            let lo = max(1, i - limit), hi = min(b.count, i + limit)
+            current[0] = min(i, over)
+            if lo > 1 { current[lo - 1] = over }
+            var best = current[0]
+            for j in lo...hi {
+                let cost = a[i - 1] == b[j - 1] ? 0 : 1
+                current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost, over)
+                best = min(best, current[j])
+            }
+            if hi < b.count { current[hi + 1] = over }
+            if best > limit { return false }
+            swap(&previous, &current)
+        }
+        return previous[b.count] <= limit
+    }
+
     public static func editDistance(_ a: String, _ b: String) -> Int {
         let a = Array(a), b = Array(b)
         if a.isEmpty { return b.count }
@@ -91,12 +116,17 @@ public enum Canonicaliser {
     public static func likelyDuplicates(in names: [String]) -> [(String, String, String)] {
         var out: [(String, String, String)] = []
         let sorted = names.sorted()
+        // Each name's normal form once, not once per pair; names more than two letters apart
+        // in length are more than two edits apart, so they are not measured.
+        let normal = sorted.map(canonical)
+        let scalars = normal.map { Array($0.unicodeScalars) }
+        let counts = sorted.map(\.count)
         for i in sorted.indices {
             for j in sorted.indices where j > i {
                 let a = sorted[i], b = sorted[j]
-                if canonical(a) == canonical(b) {
+                if normal[i] == normal[j] {
                     out.append((a, b, "same normal form"))
-                } else if min(a.count, b.count) >= 5, editDistance(canonical(a), canonical(b)) <= 2 {
+                } else if min(counts[i], counts[j]) >= 5, abs(scalars[i].count - scalars[j].count) <= 2, within(scalars[i], scalars[j], 2) {
                     out.append((a, b, "edit distance ≤ 2"))
                 }
             }

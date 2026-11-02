@@ -36,11 +36,6 @@ public enum Canonical {
 
         // Indexed once, so a large map renders in time linear in its size (the gate renders
         // it twice for every line the model writes).
-        var degree: [NodeID: Int] = [:]
-        for e in graph.edges.values {
-            degree[e.a, default: 0] += 1
-            if e.b != e.a { degree[e.b, default: 0] += 1 }
-        }
         var onNode: [NodeID: [String]] = [:], onEdge: [EdgeKey: [String]] = [:]
         for c in comments {
             switch c.attachedTo {
@@ -51,12 +46,23 @@ public enum Canonical {
         }
         var nodesUnder: [[String]: [(NodeID, Node)]] = [:]
         for (id, node) in graph.nodes where id.scope == scope { nodesUnder[node.heading, default: []].append((id, node)) }
+        // A link goes under whichever of its ends' headings comes later, so both ends are on
+        // the map by then and each was made under its own heading; an end with no line of its
+        // own in its heading's section gets a bare one there.
+        var rank: [[String]: Int] = [:]
+        for (i, h) in headings.enumerated() where rank[h] == nil { rank[h] = i }
         var edgesUnder: [[String]: [Edge]] = [:]
+        var declared = Set<NodeID>()
         for edge in edgesHere {
             let (from, to) = emittingOrder(edge)
-            let owner = from.scope == scope ? from : to
+            var owner = from.scope == scope ? from : to
+            if from.scope == scope, to.scope == scope, let hf = graph.nodes[from]?.heading, let ht = graph.nodes[to]?.heading,
+               rank[ht, default: 0] > rank[hf, default: 0] {
+                owner = to
+            }
             guard let heading = graph.nodes[owner]?.heading else { continue }
             edgesUnder[heading, default: []].append(edge)
+            for end in [edge.a, edge.b] where end.scope == scope && graph.nodes[end]?.heading == heading { declared.insert(end) }
         }
 
         for heading in headings {
@@ -70,7 +76,7 @@ public enum Canonical {
             var keyed: [(String, Int, String, [String])] = []
             for (id, node) in nodesUnder[heading] ?? [] {
                 let attached = onNode[id] ?? []
-                let isolated = node.notes.isEmpty && degree[id, default: 0] == 0
+                let isolated = node.notes.isEmpty && !declared.contains(id)
                 if isolated || !attached.isEmpty {
                     keyed.append((id.name, 0, "", ["| \(id.name)"] + attached))
                 }

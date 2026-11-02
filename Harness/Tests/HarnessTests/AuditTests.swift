@@ -131,4 +131,13 @@ final class AuditTests: XCTestCase {
         }
         XCTAssertEqual(Canonicaliser.likelyDuplicates(in: ["papers", "paper", "dragon"]).map(\.2), ["same normal form"])
     }
+
+    func testCanonicalFormKeepsEachNodeUnderItsHeading() throws {
+        for src in ["# A\n| x\n# B\n| y\n| x | y", "# A\n| x\n# B\n| y\n| y | x", "| x\n# B\n| y\n| x - | y", "# A\n| x | y\n# B\n| z\n| y | z"] {
+            let g = try Compiler.compile(src)
+            let again = try Compiler.compile(Canonical.render(g))
+            XCTAssertEqual(again.nodes.mapValues(\.heading), g.nodes.mapValues(\.heading), src)
+            XCTAssertEqual(Set(again.edges.keys), Set(g.edges.keys), src)
+        }
+    }
 }

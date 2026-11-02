@@ -152,4 +152,15 @@ final class AuditTests: XCTestCase {
             XCTAssertTrue(s.errors.isEmpty, "\(text): \(s.errors)")
         }
     }
+
+    func testTheSVGDrawsTrunksPlatesAndFolds() throws {
+        let graph = try Compiler.compile("| hub - has | a\n| a - has | b\n| b - has | c")
+        let open = Export.svg(graph, layout: MapLayout.compute(graph))
+        XCTAssertTrue(open.contains("stroke-width=\"2.2\""), "a root's links are heaviest")
+        XCTAssertTrue(open.contains("stroke-width=\"1.6\""))
+        XCTAssertTrue(open.contains("fill-opacity=\"0.05\""), "the root sits on a plate")
+        let folded = Export.svg(graph, layout: MapLayout.compute(graph, collapsed: ["a"]))
+        XCTAssertTrue(folded.contains(">+2</text>"), "a fold says how many it hides")
+        XCTAssertFalse(folded.contains(">c</text>"))
+    }
 }

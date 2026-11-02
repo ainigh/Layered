@@ -522,12 +522,29 @@ struct CanvasView: View {
             guard box.insetBy(dx: -2, dy: -2).intersects(seen) else { continue }
             var layer = world
             layer.opacity = marks.opacity(e.key.lo.name, e.key.hi.name)
-            drawEdge(e, graph.edges[e.key], depth: max(layout[e.key.lo.name]?.depth ?? 0, layout[e.key.hi.name]?.depth ?? 0), lit: litEdges.contains(e.key), in: &layer)
+            drawEdge(e, graph.edges[e.key], depth: layout.depth(of: e), lit: litEdges.contains(e.key), in: &layer)
+        }
+        // A node being dragged leaves a ghost where it was.
+        if let d = draggingNode, let from = session.displayedLayout[d.name] {
+            let ghost = Path(roundedRect: CGRect(x: from.x, y: from.y, width: from.w, height: from.h).insetBy(dx: -3, dy: -3), cornerRadius: Theme.Map.corner + 3)
+            world.stroke(ghost, with: .color(Theme.Map.tertiary.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        }
+        // What a box being drawn would select, lit as the box grows.
+        let boxed: CGRect? = boxSelect.map { box in
+            let a = v.map(box.start), b = v.map(box.end)
+            return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
         }
         for p in layout.nodes {
-            guard let node = graph.nodes[p.id], CGRect(x: p.x, y: p.y, width: p.w, height: p.h).intersects(seen) else { continue }
+            let rect = CGRect(x: p.x, y: p.y, width: p.w, height: p.h)
+            guard let node = graph.nodes[p.id], rect.intersects(seen) else { continue }
             var layer = world
             layer.opacity = marks.opacity(p.id.name)
+            if draggingNode?.name == p.id.name {
+                layer.addFilter(.shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4))
+            }
+            if let boxed, boxed.intersects(rect) {
+                layer.fill(Path(roundedRect: rect.insetBy(dx: -3.5, dy: -3.5), cornerRadius: Theme.Map.corner + 3.5), with: .color(Theme.accent.opacity(0.12)))
+            }
             if marks.found.contains(p.id.name) { drawFound(p, current: marks.current == p.id.name, in: &layer) }
             drawNode(p, node, detail: detail, in: &layer)
         }
@@ -545,10 +562,21 @@ struct CanvasView: View {
         for b in mapButtons(layout, v) { drawMapButton(b, in: &ctx) }
 
         if let linkDrag, let p = layout[linkDrag.from] {
+            // The node it would link to is ringed; the line ends on it.
+            let target = hit(linkDrag.to, layout).flatMap { $0 == linkDrag.from ? nil : layout[$0] }
+            let start = v.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.h / 2))
+            var end = linkDrag.to
+            if let t = target {
+                let r = CGRect(origin: v.screen(MapLayout.Point(x: t.x, y: t.y)), size: CGSize(width: t.w * v.k, height: t.h * v.k)).insetBy(dx: -4, dy: -4)
+                ctx.fill(Path(roundedRect: r, cornerRadius: (Theme.Map.corner + 4) * v.k), with: .color(Theme.accent.opacity(0.12)))
+                ctx.stroke(Path(roundedRect: r, cornerRadius: (Theme.Map.corner + 4) * v.k), with: .color(Theme.accent), lineWidth: 1.5)
+                end = CGPoint(x: r.minX, y: r.midY)
+            }
             var path = Path()
-            path.move(to: v.screen(MapLayout.Point(x: p.x + p.w, y: p.y + p.h / 2)))
-            path.addLine(to: linkDrag.to)
+            path.move(to: start)
+            path.addLine(to: end)
             ctx.stroke(path, with: .color(Theme.accent), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [5, 4]))
+            arrow(&ctx, tip: MapLayout.Point(x: end.x, y: end.y), from: MapLayout.Point(x: start.x, y: start.y), colour: Theme.accent, scale: 1.4)
         }
     }
 
@@ -587,7 +615,7 @@ struct CanvasView: View {
         if !p.boxed {
             // A tree's root sits on a plate; a hovered node is lit on one.
             let root = p.depth == 0 && p.childCount > 0
-            if root || hovered == p.id.name {
+            if root || hovered == p.id.name || draggingNode?.name == p.id.name {
                 let plate = Path(roundedRect: rect.insetBy(dx: -4, dy: -2), cornerRadius: Theme.Map.corner + 2)
                 ctx.fill(plate, with: .color(Theme.Map.primary.opacity(root ? 0.05 : 0.04)))
                 if root { ctx.stroke(plate, with: .color(Theme.Map.primary.opacity(0.1)), lineWidth: 0.75) }
@@ -881,12 +909,7 @@ struct CanvasView: View {
     /// A tree's links are heavier near its root and taper toward its leaves, so the main
     /// branches read first; cross-links stay hairlines.
     static func linkWidth(tree: Bool, depth: Int) -> CGFloat {
-        guard tree else { return 1 }
-        switch depth {
-        case ...1: return 2.25
-        case 2: return 1.6
-        default: return 1.25
-        }
+        CGFloat(MapLayout.linkWidth(tree: tree, depth: depth))
     }
 
     private func drawEdge(_ e: MapLayout.PlacedEdge, _ edge: Edge?, depth: Int, lit: Bool, in ctx: inout GraphicsContext) {
@@ -906,15 +929,17 @@ struct CanvasView: View {
             ctx.stroke(path, with: .color(Theme.accent.opacity(0.25)), style: StrokeStyle(lineWidth: width + 5, lineCap: .round))
         }
         ctx.stroke(path, with: .color(colour), style: StrokeStyle(lineWidth: width, lineCap: .round, dash: dash))
-        if e.arrowEnd { arrow(&ctx, tip: e.p3, from: e.p2.x == e.p3.x && e.p2.y == e.p3.y ? e.p0 : e.p2, colour: colour) }
-        if e.arrowStart { arrow(&ctx, tip: e.p0, from: e.p1.x == e.p0.x && e.p1.y == e.p0.y ? e.p3 : e.p1, colour: colour) }
+        let head = Double(max(1, width / 1.25))
+        if e.arrowEnd { arrow(&ctx, tip: e.p3, from: e.p2.x == e.p3.x && e.p2.y == e.p3.y ? e.p0 : e.p2, colour: colour, scale: head) }
+        if e.arrowStart { arrow(&ctx, tip: e.p0, from: e.p1.x == e.p0.x && e.p1.y == e.p0.y ? e.p3 : e.p1, colour: colour, scale: head) }
     }
 
-    private func arrow(_ ctx: inout GraphicsContext, tip: MapLayout.Point, from: MapLayout.Point, colour: Color) {
+    /// An arrowhead at `tip`, pointing away from `from`; `scale` grows it with a heavier line.
+    private func arrow(_ ctx: inout GraphicsContext, tip: MapLayout.Point, from: MapLayout.Point, colour: Color, scale: Double = 1) {
         let dx = tip.x - from.x, dy = tip.y - from.y
         let d = max(hypot(dx, dy), 0.001)
         let ux = dx / d, uy = dy / d
-        let length = 6.0, half = 2.4
+        let length = 6.0 * scale, half = 2.4 * scale
         var path = Path()
         path.move(to: CGPoint(x: tip.x, y: tip.y))
         path.addLine(to: CGPoint(x: tip.x - ux * length - uy * half, y: tip.y - uy * length + ux * half))

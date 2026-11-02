@@ -88,7 +88,8 @@ public enum Export {
 
         for e in layout.edges {
             let ink = palette.hue(e.branch)?.ink ?? palette.textTertiary
-            var attrs = "fill=\"none\" stroke=\"\(ink)\" stroke-width=\"\(e.tree ? 2 : 1.5)\""
+            let width = max(1.25, MapLayout.linkWidth(tree: e.tree, depth: layout.depth(of: e)))
+            var attrs = "fill=\"none\" stroke=\"\(ink)\" stroke-width=\"\(fmt(width))\" stroke-linecap=\"round\""
             switch (e.tree, graph.edges[e.key]?.note(kind: "src")) {
             case (_, "guess"): attrs += " stroke-dasharray=\"2 3\" opacity=\"0.7\""
             case (_, "world"): attrs += " stroke-dasharray=\"6 4\""
@@ -134,6 +135,10 @@ public enum Export {
                 }
             } else {
                 // From the context or the user: the icon (here the kind's dot) above the name, no card.
+                // A tree's root sits on a faint plate.
+                if isRoot, n.childCount > 0 {
+                    out.append("<rect x=\"-4\" y=\"-2\" width=\"\(fmt(n.w + 8))\" height=\"\(fmt(n.h + 4))\" rx=\"10\" fill=\"\(palette.textPrimary)\" fill-opacity=\"0.05\" stroke=\"\(palette.textPrimary)\" stroke-opacity=\"0.1\" stroke-width=\"0.75\"/>")
+                }
                 let cx = n.w / 2
                 let iconY = M.openPadY + M.iconLine / 2
                 out.append("<circle cx=\"\(fmt(cx))\" cy=\"\(fmt(iconY))\" r=\"10\" fill=\"\(kindColour(node.note(kind: "kind")))\"/>")
@@ -146,6 +151,14 @@ public enum Export {
                     let y = nameY + (Double(n.nameLines.count) - 0.5) * M.nameLine + Double(i) * M.noteLine + M.noteLine / 2
                     out.append("<text x=\"\(fmt(cx))\" y=\"\(fmt(y))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"11.5\" font-weight=\"500\" fill=\"\(palette.textSecondary)\">\(escape(note))</text>")
                 }
+            }
+            if n.hiddenCount > 0 {
+                // A folded branch: how many nodes it hides, where it would leave the node.
+                let ink = palette.hue(n.branch)?.ink ?? palette.textSecondary
+                let text = "+\(n.hiddenCount)"
+                let pw = max(18, Double(text.count) * 6.2 + 10), px = n.w - n.anchorInset + 3, py = n.anchorY - 9
+                out.append("<rect x=\"\(fmt(px))\" y=\"\(fmt(py))\" width=\"\(fmt(pw))\" height=\"18\" rx=\"9\" fill=\"\(palette.background)\" stroke=\"\(ink)\" stroke-width=\"1\"/>")
+                out.append("<text x=\"\(fmt(px + pw / 2))\" y=\"\(fmt(n.anchorY))\" dominant-baseline=\"central\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"\(ink)\">\(text)</text>")
             }
             out.append("</g>")
         }

@@ -451,6 +451,24 @@ public struct MapLayout: Equatable, Sendable {
         self[name].map { Point(x: ($0.center.x + dx).rounded(), y: ($0.center.y + dy).rounded()) }
     }
 
+    // MARK: - Weights
+
+    /// How heavy a link is drawn, in points: a tree's links are heaviest from its root and
+    /// taper toward its leaves, so the main branches read first; cross-links are hairlines.
+    public static func linkWidth(tree: Bool, depth: Int) -> Double {
+        guard tree else { return 1 }
+        switch depth {
+        case ...1: return 2.25
+        case 2: return 1.6
+        default: return 1.25
+        }
+    }
+
+    /// How deep a link reaches: the depth of its deeper end.
+    public func depth(of e: PlacedEdge) -> Int {
+        max(self[e.key.lo.name]?.depth ?? 0, self[e.key.hi.name]?.depth ?? 0)
+    }
+
     // MARK: - Moving between layouts
 
     /// Partway from `old` to this layout, `t` from 0 (as `old` had it) to 1 (this layout):
